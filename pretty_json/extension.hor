@@ -1,0 +1,347 @@
+// Pretty JSON, a file of JSON (or what's selected of one) formatted, minified, its keys sorted, or checked. Formatting
+// keeps every number and text exactly as it was written, only the space between them changes. A .json file is checked
+// as it's saved too, the first thing wrong with it in Problems where it is.
+//
+// Comments, the // and /* */ that tsconfig.json and VS Code's settings have, are read past rather than called wrong,
+// but a file with them isn't formatted, the formatting would lose them.
+let extension = {
+    name: "Pretty JSON",
+    description: "JSON formatted, minified, its keys sorted, and checked as it's saved.",
+    version: "1.0.0",
+    author: "bogz",
+    settings: {
+        indent: { title: "Indent", about: "How many spaces a level is indented by, 0 for a tab.", kind: "number", default: 4 },
+        check_on_save: { title: "Check on save", about: "Check a .json file every time it's saved, and say what's wrong with it in Problems.", kind: "flag", default: true }
+    }
+};
+
+// The most it reads. Hex gives an extension a second for anything it does and switches it off when it takes longer,
+// and sixty thousand characters is about half of that on a desktop that is busy with other things
+let MOST = 60000;
+
+func on_start(hex) {
+    hex.command("Format JSON", func(hex) { rewrite(hex, false, false); });
+    hex.command("Format JSON, keys sorted", func(hex) { rewrite(hex, false, true); });
+    hex.command("Minify JSON", func(hex) { rewrite(hex, true, false); });
+    hex.command("Check JSON", func(hex) {
+        let target = target_of(hex);
+        if (target == null) { return; }
+        let read = parse(target.text);
+        if (read.error == null) {
+            hex.say("that's JSON, and nothing's wrong with it");
+        } else {
+            let at = place_of(target.text, read.error.offset, target.from);
+            hex.say(`line {at.line}, column {at.column}, {read.error.message}`);
+            hex.select(at);
+        }
+    });
+}
+
+func on_save(hex, file) {
+    if (!hex.setting("check_on_save") || !file.lower().ends_with(".json")) {
+        return;
+    }
+    let text = hex.read(file);
+    if (len(text) > MOST) {
+        return;
+    }
+    let read = parse(text);
+    if (read.error == null) {
+        hex.problems(file, []);
+        return;
+    }
+    let at = place_of(text, read.error.offset, { line: 1, column: 1 });
+    hex.problems(file, [{ line: at.line, column: at.column, message: read.error.message }]);
+}
+
+/* What's worked on */
+
+// What's selected, or the whole file when nothing is, its text and where it starts
+func target_of(hex) {
+    if (hex.selection == null || hex.lines == null) {
+        hex.say("needs a newer Hex, one with hex.selection and hex.lines");
+        return null;
+    }
+    let s = hex.selection();
+    if (s == null) {
+        return null;
+    }
+    let target = null;
+    if (s.text != "") {
+        target = { text: s.text, from: s.from, to: s.to, whole: false };
+    } else {
+        let lines = hex.lines();
+        target = { text: lines.join("\n"), from: { line: 1, column: 1 }, to: { line: len(lines), column: len(lines[len(lines) - 1]) + 1 }, whole: true };
+    }
+    if (len(target.text) > MOST) {
+        hex.say(`that's more than {MOST} characters, too much for an extension to get through in the second Hex gives it`);
+        return null;
+    }
+    return target;
+}
+
+func rewrite(hex, minify, sort_keys) {
+    let target = target_of(hex);
+    if (target == null) { return; }
+    let read = parse(target.text);
+    if (read.error != null) {
+        let at = place_of(target.text, read.error.offset, target.from);
+        hex.say(`not JSON, line {at.line}, column {at.column}, {read.error.message}`);
+        hex.select(at);
+        return;
+    }
+    if (read.comments) {
+        hex.say("it has comments in it, which formatting would lose, so it's left as it is");
+        return;
+    }
+
+    let size = hex.setting("indent");
+    let pieces = [];
+    write(read.value, minify ? "" : (size > 0 ? " ".repeat(size) : "\t"), 0, pieces, minify, sort_keys);
+    let text = pieces.join("");
+    if (target.whole && !minify) {
+        text += "\n";
+    }
+    if (text == target.text) {
+        hex.say("it was formatted like that already");
+        return;
+    }
+    hex.replace_text(target.from, target.to, text, 0);
+}
+
+// The line and column of a place in a text, counted from where the text starts in the file
+func place_of(text, offset, from) {
+    let line = from.line;
+    let column = from.column;
+    for (i in range(math.min(offset, len(text)))) {
+        if (text[i] == "\n") {
+            line += 1;
+            column = 1;
+        } else {
+            column += 1;
+        }
+    }
+    return { line: line, column: column };
+}
+
+/* Reading it */
+
+// @doc JSON read into a tree of what's in it, every number and text kept as written. { value, comments, error }, the
+// error { message, offset } of the first thing wrong
+func parse(text) {
+    let p = { s: text, at: 0, error: null, comments: false };
+    space(p);
+    let value = read_value(p);
+    if (p.error == null) {
+        space(p);
+        if (p.at < len(p.s)) {
+            fail(p, "there's more after the end of it");
+        }
+    }
+    return { value: value, comments: p.comments, error: p.error };
+}
+
+func fail(p, message) {
+    if (p.error == null) {
+        p.error = { message: message, offset: p.at };
+    }
+    return null;
+}
+
+// What's between values, spaces, lines and comments. The loops here and in the texts and numbers work on locals and put
+// the place back once, p.s[p.at] every character was most of the time a big file took
+func space(p) {
+    let s = p.s;
+    let at = p.at;
+    let n = len(s);
+    let c = "";
+    while (at < n) {
+        c = s[at];
+        if (c == " " || c == "\n" || c == "\r" || c == "\t") {
+            at += 1;
+        } else if (c == "/" && at + 1 < n && s[at + 1] == "/") {
+            p.comments = true;
+            while (at < n && s[at] != "\n") { at += 1; }
+        } else if (c == "/" && at + 1 < n && s[at + 1] == "*") {
+            p.comments = true;
+            at += 2;
+            while (at + 1 < n && !(s[at] == "*" && s[at + 1] == "/")) { at += 1; }
+            at += 2;
+        } else {
+            break;
+        }
+    }
+    p.at = at;
+}
+
+func read_value(p) {
+    if (p.at >= len(p.s)) {
+        return fail(p, "it ends where a value should be");
+    }
+    let c = p.s[p.at];
+    if (c == "{") { return read_object(p); }
+    if (c == "[") { return read_array(p); }
+    if (c == "\"") { return read_string(p); }
+    if (c == "-" || (c >= "0" && c <= "9")) { return read_number(p); }
+    for (word in ["true", "false", "null"]) {
+        if (p.s.substring(p.at, p.at + len(word)) == word) {
+            p.at += len(word);
+            return { kind: "word", raw: word };
+        }
+    }
+    return fail(p, `a value can't start with {c}`);
+}
+
+func read_object(p) {
+    let node = { kind: "object", keys: [], values: [] };
+    p.at += 1;
+    space(p);
+    if (p.at < len(p.s) && p.s[p.at] == "}") {
+        p.at += 1;
+        return node;
+    }
+    let key = null;
+    while (p.error == null) {
+        space(p);
+        if (p.at >= len(p.s) || p.s[p.at] != "\"") {
+            return fail(p, p.at < len(p.s) && p.s[p.at] == "}" ? "a comma before the } with nothing after it" : "a key has to be a text in double quotes");
+        }
+        key = read_string(p);
+        space(p);
+        if (p.at >= len(p.s) || p.s[p.at] != ":") {
+            return fail(p, "a : should come after the key");
+        }
+        p.at += 1;
+        space(p);
+        node.keys.push(key);
+        node.values.push(read_value(p));
+        space(p);
+        if (p.at < len(p.s) && p.s[p.at] == ",") {
+            p.at += 1;
+        } else if (p.at < len(p.s) && p.s[p.at] == "}") {
+            p.at += 1;
+            return node;
+        } else {
+            return fail(p, "a , or a } should come next");
+        }
+    }
+    return null;
+}
+
+func read_array(p) {
+    let node = { kind: "array", items: [] };
+    p.at += 1;
+    space(p);
+    if (p.at < len(p.s) && p.s[p.at] == "]") {
+        p.at += 1;
+        return node;
+    }
+    while (p.error == null) {
+        space(p);
+        if (p.at < len(p.s) && p.s[p.at] == "]") {
+            return fail(p, "a comma before the ] with nothing after it");
+        }
+        node.items.push(read_value(p));
+        space(p);
+        if (p.at < len(p.s) && p.s[p.at] == ",") {
+            p.at += 1;
+        } else if (p.at < len(p.s) && p.s[p.at] == "]") {
+            p.at += 1;
+            return node;
+        } else {
+            return fail(p, "a , or a ] should come next");
+        }
+    }
+    return null;
+}
+
+func read_string(p) {
+    let s = p.s;
+    let start = p.at;
+    let at = start + 1;
+    let n = len(s);
+    let c = "";
+    while (at < n) {
+        c = s[at];
+        if (c == "\\") {
+            at += 2;
+        } else if (c == "\"") {
+            p.at = at + 1;
+            return { kind: "text", raw: s.substring(start, at + 1) };
+        } else if (c == "\n") {
+            p.at = at;
+            return fail(p, "a text goes on past the end of its line");
+        } else {
+            at += 1;
+        }
+    }
+    return fail(p, "a text that's never closed");
+}
+
+func read_number(p) {
+    let s = p.s;
+    let start = p.at;
+    let at = start;
+    let n = len(s);
+    let c = "";
+    while (at < n) {
+        c = s[at];
+        if ((c >= "0" && c <= "9") || c == "-" || c == "+" || c == "." || c == "e" || c == "E") {
+            at += 1;
+        } else {
+            break;
+        }
+    }
+    p.at = at;
+    let raw = s.substring(start, at);
+    if (raw == "-" || raw.ends_with(".") || raw.ends_with("e") || raw.ends_with("E")) {
+        p.at = start;
+        return fail(p, `{raw} isn't a number`);
+    }
+    return { kind: "number", raw: raw };
+}
+
+/* Writing it */
+
+// @doc The tree written out into a list of pieces, a level indented by unit, on one line when it's minified
+func write(node, unit, depth, out, minify, sort_keys) {
+    if (node.kind == "object") {
+        if (len(node.keys) == 0) {
+            out.push("{}");
+            return;
+        }
+        let order = range(len(node.keys));
+        if (sort_keys) {
+            order.sort(func(i) { return node.keys[i].raw; });
+        }
+        out.push("{");
+        let first = true;
+        for (i in order) {
+            if (!first) { out.push(","); }
+            first = false;
+            if (!minify) { out.push("\n" + unit.repeat(depth + 1)); }
+            out.push(node.keys[i].raw);
+            out.push(minify ? ":" : ": ");
+            write(node.values[i], unit, depth + 1, out, minify, sort_keys);
+        }
+        if (!minify) { out.push("\n" + unit.repeat(depth)); }
+        out.push("}");
+        return;
+    }
+    if (node.kind == "array") {
+        if (len(node.items) == 0) {
+            out.push("[]");
+            return;
+        }
+        out.push("[");
+        for (i in range(len(node.items))) {
+            if (i > 0) { out.push(","); }
+            if (!minify) { out.push("\n" + unit.repeat(depth + 1)); }
+            write(node.items[i], unit, depth + 1, out, minify, sort_keys);
+        }
+        if (!minify) { out.push("\n" + unit.repeat(depth)); }
+        out.push("]");
+        return;
+    }
+    out.push(node.raw);
+}

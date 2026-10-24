@@ -1,0 +1,56 @@
+// The snippets Snippets comes with, by the endings of the files they're for (several in one key, a space between them,
+// * for every file). A snippet is its trigger, the word typed before Tab, and what it's written out as, a text or
+// { body, about }. In a body ${1:name} is the first place Tab goes with name selected in it, $2 the second with nothing,
+// $0 where it ends, and a tab is a level of indentation (as many spaces as the setting says). Your own go in a file of
+// the same shape, see the extension's settings, and win over these.
+let builtin_snippets = {
+    ".js .mjs .cjs .ts .jsx .tsx": {
+        fn: { body: "function ${1:name}(${2}) {\n\t${0}\n}", about: "a function" },
+        afn: { body: "async function ${1:name}(${2}) {\n\t${0}\n}", about: "an async function" },
+        arrow: { body: "const ${1:name} = (${2}) => {\n\t${0}\n};", about: "an arrow function" },
+        cl: { body: "console.log(${1});", about: "console.log" },
+        if: { body: "if (${1:condition}) {\n\t${0}\n}", about: "if" },
+        ife: { body: "if (${1:condition}) {\n\t${2}\n} else {\n\t${0}\n}", about: "if and else" },
+        for: { body: "for (let ${1:i} = 0; ${1:i} < ${2:items}.length; ${1:i}++) {\n\t${0}\n}", about: "a counted for" },
+        forof: { body: "for (const ${1:item} of ${2:items}) {\n\t${0}\n}", about: "for of" },
+        try: { body: "try {\n\t${1}\n} catch (${2:error}) {\n\t${0}\n}", about: "try and catch" },
+        class: { body: "class ${1:Name} {\n\tconstructor(${2}) {\n\t\t${0}\n\t}\n}", about: "a class" },
+        imp: { body: "import ${2:thing} from \"${1:module}\";", about: "an import" },
+        exp: { body: "export default ${0};", about: "export default" }
+    },
+    ".cs": {
+        prop: { body: "public ${1:int} ${2:Name} { get; set; }", about: "a property" },
+        cw: { body: "Console.WriteLine(${1});", about: "Console.WriteLine" },
+        if: { body: "if (${1:condition})\n{\n\t${0}\n}", about: "if" },
+        for: { body: "for (int ${1:i} = 0; ${1:i} < ${2:length}; ${1:i}++)\n{\n\t${0}\n}", about: "a counted for" },
+        foreach: { body: "foreach (var ${1:item} in ${2:items})\n{\n\t${0}\n}", about: "foreach" },
+        try: { body: "try\n{\n\t${1}\n}\ncatch (${2:Exception} e)\n{\n\t${0}\n}", about: "try and catch" },
+        class: { body: "internal sealed class ${1:Name}\n{\n\t${0}\n}", about: "a class" },
+        record: { body: "internal sealed record ${1:Name}(${2});", about: "a record" },
+        summary: { body: "/// <summary>${1}</summary>", about: "a doc comment" },
+        fact: { body: "[Fact]\npublic void ${1:It_does_what_it_says}()\n{\n\t${0}\n}", about: "an xunit test" }
+    },
+    ".py": {
+        def: { body: "def ${1:name}(${2}):\n\t${0:pass}", about: "a function" },
+        class: { body: "class ${1:Name}:\n\tdef __init__(self${2}):\n\t\t${0:pass}", about: "a class" },
+        main: { body: "if __name__ == \"__main__\":\n\t${0:main()}", about: "if __name__ is __main__" },
+        for: { body: "for ${1:item} in ${2:items}:\n\t${0:pass}", about: "for in" },
+        with: { body: "with ${1:open(path)} as ${2:f}:\n\t${0:pass}", about: "with" },
+        try: { body: "try:\n\t${1:pass}\nexcept ${2:Exception} as e:\n\t${0:raise}", about: "try and except" },
+        pr: { body: "print(${1})", about: "print" }
+    },
+    ".hor": {
+        func: { body: "func ${1:name}(${2}) {\n\t${0}\n}", about: "a function" },
+        if: { body: "if (${1:condition}) {\n\t${0}\n}", about: "if" },
+        for: { body: "for (${1:item} in ${2:items}) {\n\t${0}\n}", about: "for in" },
+        while: { body: "while (${1:condition}) {\n\t${0}\n}", about: "while" },
+        cmd: { body: "hex.command(\"${1:Name}\", func(hex) {\n\t${0}\n});", about: "a command of an extension" },
+        ext: { body: "let extension = {\n\tname: \"${1:Name}\",\n\tdescription: \"${2:What it does.}\",\n\tversion: \"1.0.0\",\n\tauthor: \"${3:you}\"\n};\n\nfunc on_start(hex) {\n\t${0}\n}", about: "an extension, its extension object and on_start" }
+    },
+    ".md .markdown": {
+        link: { body: "[${1:text}](${2:url})", about: "a link" },
+        img: { body: "![${1:what it is}](${2:path})", about: "a picture" },
+        code: { body: "```${1:language}\n${0}\n```", about: "a fenced block of code" },
+        table: { body: "| ${1:Column} | ${2:Column} |\n| --- | --- |\n| ${0} |  |", about: "a table" }
+    }
+};

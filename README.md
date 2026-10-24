@@ -11,6 +11,13 @@ a newer version. An install is a copy of the folder into the `extensions` folder
 | `hello_dolly` | A random greeting in the title bar every time Hex starts |
 | `markdown_preview` | Any Markdown file as it reads, next to its code, following it as it's typed |
 | `move_editor` | Fighter2D's moves edited on a timeline, frame by frame, with their boxes on the sprite |
+| `pretty_json` | JSON formatted, minified, its keys sorted, and checked as it's saved |
+| `snippets` | A word and Tab written out as the code it stands for, then Tab from one place in it to the next |
+| `text_tools` | Sort, reverse, unique and join lines, line them up, change the case of a word and wrap a selection |
+| `todo` | Every TODO and FIXME of the file in a menu to go to, and in Problems if you want them there |
+
+Pretty JSON, Snippets, Text tools and the TODO list need a Hex with `hex.selection`, `hex.select` and `hex.lines`
+(after 1.0.2). On an older one they say so rather than doing anything.
 
 ## How it's laid out
 

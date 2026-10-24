@@ -1,0 +1,80 @@
+// TODO list, every TODO, FIXME, HACK, XXX and BUG of the file on screen in a menu, the one picked gone to. They can go
+// in Problems as well, as warnings, kept up as the file is typed into and saved.
+let extension = {
+    name: "TODO list",
+    description: "Every TODO and FIXME of the file in a menu to go to, and in Problems if you want them there.",
+    version: "1.0.0",
+    author: "bogz",
+    settings: {
+        tags: { title: "Tags", about: "The words that are looked for, a comma between them. Whole words in capitals, followed by a colon, a space or a bracket.", kind: "text", default: "TODO, FIXME, HACK, XXX, BUG" },
+        in_problems: { title: "In Problems", about: "Every one of them in Problems as a warning, for the file on screen.", kind: "flag", default: false }
+    }
+};
+
+func on_start(hex) {
+    hex.command("Go to TODO...", func(hex) {
+        if (hex.lines == null || hex.select == null) {
+            hex.say("needs a newer Hex, one with hex.lines and hex.select");
+            return;
+        }
+        let found = find(hex.lines() ?? [], tags_of(hex));
+        if (len(found) == 0) {
+            hex.say("nothing to do in this file");
+            return;
+        }
+        hex.menu(found.map(func(todo) {
+            return { label: `{todo.line}  {todo.text}`, on_pressed: func(hex) { hex.select({ line: todo.line, column: todo.column }); } };
+        }));
+    });
+}
+
+func on_open(hex, file) { keep_up(hex, file); }
+func on_change(hex, file) { keep_up(hex, file); }
+func on_save(hex, file) { keep_up(hex, file); }
+
+func on_setting(hex, name, value) {
+    if (name == "in_problems" && !value && hex.file() != null) {
+        hex.problems(hex.file(), []);
+    }
+}
+
+// The file on screen's TODOs in Problems, when the settings say so
+func keep_up(hex, file) {
+    if (!hex.setting("in_problems") || hex.lines == null || file != hex.file()) {
+        return;
+    }
+    let found = find(hex.lines() ?? [], tags_of(hex));
+    hex.problems(file, found.map(func(todo) { return { line: todo.line, column: todo.column, message: todo.text, warning: true }; }));
+}
+
+func tags_of(hex) {
+    return hex.setting("tags").split(",");
+}
+
+func is_word(c) { return (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || (c >= "0" && c <= "9") || c == "_"; }
+
+// @doc Every TODO in some lines, { line, column, text } with the text from the tag to the end of its line
+func find(lines, tags) {
+    let found = [];
+    for (i in range(len(lines))) {
+        let line = lines[i];
+        let best = -1;
+        for (tag in tags) {
+            let at = line.index_of(tag);
+            if (at < 0) { continue; }
+            let before = at > 0 ? line[at - 1] : "";
+            let after = at + len(tag) < len(line) ? line[at + len(tag)] : "";
+            let whole = !is_word(before) && (after == "" || after == ":" || after == " " || after == "(");
+            if (whole && (best < 0 || at < best)) {
+                best = at;
+            }
+        }
+        if (best >= 0) {
+            let text = line.substring(best).trim();
+            // A block comment's end isn't part of what's to be done
+            if (text.ends_with("*/")) { text = text.substring(0, len(text) - 2).trim(); }
+            found.push({ line: i + 1, column: best + 1, text: text });
+        }
+    }
+    return found;
+}
