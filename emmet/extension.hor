@@ -1,0 +1,752 @@
+// Emmet, HTML written short. An abbreviation typed before the caret, `ul>li.item$*3>a{Link $}`, becomes the HTML it
+// stands for on Tab (in the files it's switched on for, and only when the abbreviation looks like one) or on Ctrl+E (in
+// any file, whatever is before the caret). Ctrl+Z puts the abbreviation back.
+//
+//   div#main.wide          an element, an id and classes (.a.b), no name for a div (or an li in a list, a tr in a table...)
+//   a[href=# title="Hi"]   attributes, quoted or not, [disabled] one with nothing in it
+//   p{Some text}           text inside
+//   ul>li                  a child, nav>ul>li three deep
+//   h1+p                   a sibling
+//   div>p^h2               ^ back up a level, ^^ two
+//   li*3                   three of them, $ the number of each (item$$ is item01, $@- counts down, $@3 from 3)
+//   (dt+dd)*2              a group, repeated or not
+//   ! or html:5            a page to start from, link:css, input:email, btn:s and the rest of the snippets below
+//
+// The caret goes in the first empty attribute or element, the expansion indented like the line it was typed on.
+let extension = {
+    name: "Emmet",
+    description: "HTML abbreviations written out on Tab or Ctrl+E, ul>li.item$*3 and the rest of Emmet's shorthand.",
+    version: "1.0.0",
+    author: "bogz",
+    settings: {
+        files: { title: "Files", about: "The kinds of file Tab writes abbreviations out in, by their endings. Ctrl+E works in any file.", kind: "text", default: ".html, .htm, .xhtml, .php, .vue, .svelte, .jsx, .tsx, .cshtml, .razor, .xml" },
+        tab: { title: "Expand on Tab", about: "Tab writes out the abbreviation before the caret, when there is one, and indents when there isn't.", kind: "flag", default: true },
+        indent: { title: "Indent", about: "How many spaces a level of the expansion is indented by, 0 for a tab.", kind: "number", default: 4 }
+    }
+};
+
+/* What HTML is */
+
+// @doc The elements that are never closed, written <br> (or <br /> in JSX and XML)
+let VOID = { area: true, base: true, br: true, col: true, embed: true, hr: true, img: true, input: true, link: true, meta: true, param: true, source: true, track: true, wbr: true, keygen: true, command: true };
+
+// @doc The elements that sit in a line of text, kept on one line with what's inside them
+let INLINE = { a: true, abbr: true, acronym: true, b: true, bdi: true, bdo: true, big: true, br: true, button: true, cite: true, code: true, data: true, del: true, dfn: true, em: true, font: true, i: true, img: true, input: true, ins: true, kbd: true, label: true, mark: true, meter: true, output: true, q: true, s: true, samp: true, select: true, small: true, span: true, strike: true, strong: true, sub: true, sup: true, textarea: true, time: true, tt: true, u: true, var: true, wbr: true };
+
+// @doc The attributes an element has written out whether they were asked for or not, empty ones for the caret to go into
+let DEFAULTS = {
+    a: [["href", ""]],
+    abbr: [["title", ""]],
+    area: [["shape", ""], ["coords", ""], ["href", ""], ["alt", ""]],
+    audio: [["src", ""]],
+    base: [["href", ""]],
+    bdo: [["dir", ""]],
+    embed: [["src", ""], ["type", ""]],
+    form: [["action", ""]],
+    html: [["lang", "en"]],
+    iframe: [["src", ""], ["frameborder", "0"]],
+    img: [["src", ""], ["alt", ""]],
+    input: [["type", "text"]],
+    label: [["for", ""]],
+    link: [["rel", "stylesheet"], ["href", ""]],
+    object: [["data", ""], ["type", ""]],
+    option: [["value", ""]],
+    select: [["name", ""], ["id", ""]],
+    source: [["src", ""], ["type", ""]],
+    textarea: [["name", ""], ["id", ""], ["cols", "30"], ["rows", "10"]],
+    video: [["src", ""]]
+};
+
+// @doc What an element with no name is, by the element it's inside (a div anywhere else, a span in an inline one)
+let IMPLIED = { ul: "li", ol: "li", table: "tr", tbody: "tr", thead: "tr", tfoot: "tr", tr: "td", select: "option", optgroup: "option", datalist: "option", audio: "source", video: "source", picture: "source", map: "area", colgroup: "col" };
+
+// @doc Snippets, a name that stands for an abbreviation of its own
+let SNIPPETS = {
+    "!!!": "!!!",
+    "!":"!!!+html>(head>meta:utf+meta:vp+title{Document})+body",
+    "html:5": "!!!+html>(head>meta:utf+meta:vp+title{Document})+body",
+    "doc": "html>(head>meta:utf+meta:vp+title{Document})+body",
+    "a:link": "a[href=http://]",
+    "a:mail": "a[href=mailto:]",
+    "a:tel": "a[href=tel:+]",
+    "link:css": "link[href=style.css]",
+    "link:favicon": "link[rel=\"shortcut icon\" type=image/x-icon href=favicon.ico]",
+    "link:icon": "link[rel=icon type=image/png href=favicon.png]",
+    "script:src": "script[src]",
+    "script:module": "script[type=module src]",
+    "meta:utf": "meta[charset=UTF-8]",
+    "meta:vp": "meta[name=viewport content=\"width=device-width, initial-scale=1.0\"]",
+    "meta:compat": "meta[http-equiv=X-UA-Compatible content=\"IE=edge\"]",
+    "meta:desc": "meta[name=description content]",
+    "form:get": "form[method=get]",
+    "form:post": "form[method=post]",
+    "img:s": "img[srcset]",
+    "btn": "button",
+    "btn:s": "button[type=submit]",
+    "btn:r": "button[type=reset]",
+    "btn:b": "button[type=button]",
+    "bq": "blockquote",
+    "fig": "figure",
+    "figc": "figcaption",
+    "pic": "picture",
+    "ifr": "iframe",
+    "emb": "embed",
+    "obj": "object",
+    "cap": "caption",
+    "colg": "colgroup",
+    "fst": "fieldset",
+    "leg": "legend",
+    "optg": "optgroup",
+    "opt": "option",
+    "tarea": "textarea",
+    "sect": "section",
+    "art": "article",
+    "hdr": "header",
+    "ftr": "footer",
+    "adr": "address",
+    "dlg": "dialog",
+    "str": "strong",
+    "prog": "progress",
+    "mn": "main",
+    "tem": "template",
+    "datag": "datagrid",
+    "datal": "datalist",
+    "out": "output",
+    "det": "details",
+    "sum": "summary",
+    "ul+": "ul>li",
+    "ol+": "ol>li",
+    "dl+": "dl>dt+dd",
+    "table+": "table>tr>td",
+    "tr+": "tr>td",
+    "select+": "select>option",
+    "optg+": "optgroup>option",
+    "map+": "map>area",
+    "pic+": "picture>source+img"
+};
+
+// @doc input:email and the like, and the letters that stand for the common types (input:t, input:c...)
+let INPUT_TYPES = { t: "text", p: "password", c: "checkbox", r: "radio", h: "hidden", f: "file", s: "submit", b: "button", i: "image" };
+
+// The most elements one abbreviation may write, li*100000 would otherwise go on past the second Hex gives an extension
+let MOST = 2000;
+
+/* Reading an abbreviation */
+
+func is_letter(c) { return (c >= "a" && c <= "z") || (c >= "A" && c <= "Z"); }
+func is_digit(c) { return c >= "0" && c <= "9"; }
+
+// What a name, an id or a class may be made of
+func is_name_char(c) { return is_letter(c) || is_digit(c) || c == "-" || c == "_" || c == ":" || c == "$" || c == "@" || c == "!"; }
+
+// @doc An abbreviation as a tree, the elements at the top of it, or null when it isn't one
+func parse(abbreviation) {
+    let p = { s: abbreviation, at: 0, wrong: false };
+    let nodes = parse_list(p, false);
+    if (p.wrong || p.at < len(p.s)) {
+        return null;
+    }
+    return nodes;
+}
+
+// Elements joined by > + and ^, up to the end or a ) when inside a group
+func parse_list(p, grouped) {
+    let root = { children: [] };
+    let parents = [root];
+    let last = null;
+
+    // A while has no scope of its own a turn, what it uses is declared out here
+    let c = "";
+    let node = null;
+    let op = "";
+    while (p.at < len(p.s) && !p.wrong) {
+        c = p.s[p.at];
+        if (c == ")") {
+            if (!grouped) {
+                p.wrong = true;
+            }
+            return root.children;
+        }
+
+        if (c == "(") {
+            p.at += 1;
+            node = { group: true, children: parse_list(p, true), count: 1 };
+            if (p.at >= len(p.s) || p.s[p.at] != ")") {
+                p.wrong = true;
+                return root.children;
+            }
+            p.at += 1;
+        } else {
+            node = parse_element(p);
+            if (node == null) {
+                p.wrong = true;
+                return root.children;
+            }
+        }
+
+        node.count = parse_count(p);
+        parents[len(parents) - 1].children.push(node);
+        last = node;
+
+        // What comes after it, another element at the same level, inside it, or levels up
+        if (p.at >= len(p.s)) {
+            return root.children;
+        }
+        op = p.s[p.at];
+        if (op == ")") {
+            continue;
+        }
+        p.at += 1;
+        if (op == ">") {
+            parents.push(last.group ? deepest_of(last) : last);
+        } else if (op == "^") {
+            if (len(parents) > 1) { parents.pop(); }
+            while (p.at < len(p.s) && p.s[p.at] == "^") {
+                if (len(parents) > 1) { parents.pop(); }
+                p.at += 1;
+            }
+        } else if (op != "+") {
+            p.wrong = true;
+        }
+    }
+
+    return root.children;
+}
+
+// Where what is put inside a group (or a snippet) goes, its last element, and that one's last, all the way down
+func deepest_of(node) {
+    let at = node;
+    while (len(at.children) > 0) {
+        at = at.children[len(at.children) - 1];
+    }
+    return at;
+}
+
+// An element, its name and then its #id, .classes, [attributes] and {text} in any order
+func parse_element(p) {
+    let node = { group: false, name: "", id: null, classes: [], attrs: [], text: null, children: [], count: 1 };
+    node.name = read_name(p);
+
+    // ul+ and the like are snippets, the + theirs when nothing that could be an element comes after it
+    if (p.at < len(p.s) && p.s[p.at] == "+" && SNIPPETS[node.name + "+"] != null) {
+        let after = p.at + 1 < len(p.s) ? p.s[p.at + 1] : "";
+        if (after == "" || after == ")" || after == "^" || after == "*" || after == "+") {
+            node.name = node.name + "+";
+            p.at += 1;
+        }
+    }
+
+    let any = len(node.name) > 0;
+    let c = "";
+    let named = "";
+    let said = null;
+    while (p.at < len(p.s)) {
+        c = p.s[p.at];
+        if (c == "#") {
+            p.at += 1;
+            node.id = read_name(p);
+        } else if (c == ".") {
+            p.at += 1;
+            named = read_name(p);
+            if (len(named) == 0) { return null; }
+            node.classes.push(named);
+        } else if (c == "[") {
+            p.at += 1;
+            if (!read_attributes(p, node)) { return null; }
+        } else if (c == "{") {
+            p.at += 1;
+            said = read_text(p);
+            if (said == null) { return null; }
+            node.text = (node.text ?? "") + said;
+        } else {
+            break;
+        }
+        any = true;
+    }
+
+    return any ? node : null;
+}
+
+func read_name(p) {
+    let from = p.at;
+    while (p.at < len(p.s) && is_name_char(p.s[p.at])) {
+        p.at += 1;
+    }
+    return p.s.substring(from, p.at);
+}
+
+// *3 after an element, 1 when there's none
+func parse_count(p) {
+    if (p.at >= len(p.s) || p.s[p.at] != "*") {
+        return 1;
+    }
+    p.at += 1;
+    let from = p.at;
+    while (p.at < len(p.s) && is_digit(p.s[p.at])) {
+        p.at += 1;
+    }
+    return p.at > from ? number(p.s.substring(from, p.at)) : 1;
+}
+
+// [a=b c="d e" f], the [ already read, false when it doesn't end
+func read_attributes(p, node) {
+    let c = "";
+    let from = 0;
+    let name = "";
+    let value = "";
+    let quote = "";
+    let start = 0;
+    while (p.at < len(p.s)) {
+        c = p.s[p.at];
+        if (c == "]") {
+            p.at += 1;
+            return true;
+        }
+        if (c == " ") {
+            p.at += 1;
+            continue;
+        }
+
+        from = p.at;
+        while (p.at < len(p.s) && p.s[p.at] != "=" && p.s[p.at] != " " && p.s[p.at] != "]") {
+            p.at += 1;
+        }
+        name = p.s.substring(from, p.at);
+        value = "";
+        if (p.at < len(p.s) && p.s[p.at] == "=") {
+            p.at += 1;
+            quote = p.at < len(p.s) ? p.s[p.at] : "";
+            if (quote == "\"" || quote == "'") {
+                p.at += 1;
+                start = p.at;
+                while (p.at < len(p.s) && p.s[p.at] != quote) {
+                    p.at += 1;
+                }
+                if (p.at >= len(p.s)) { return false; }
+                value = p.s.substring(start, p.at);
+                p.at += 1;
+            } else {
+                start = p.at;
+                while (p.at < len(p.s) && p.s[p.at] != " " && p.s[p.at] != "]") {
+                    p.at += 1;
+                }
+                value = p.s.substring(start, p.at);
+            }
+        }
+        if (len(name) > 0) {
+            node.attrs.push([name, value]);
+        }
+    }
+    return false;
+}
+
+// {text}, the { already read, braces inside it kept as long as they pair up, null when it doesn't end
+func read_text(p) {
+    let depth = 1;
+    let from = p.at;
+    let c = "";
+    while (p.at < len(p.s)) {
+        c = p.s[p.at];
+        if (c == "{") {
+            depth += 1;
+        } else if (c == "}") {
+            depth -= 1;
+            if (depth == 0) {
+                let said = p.s.substring(from, p.at);
+                p.at += 1;
+                return said;
+            }
+        }
+        p.at += 1;
+    }
+    return null;
+}
+
+/* Writing it out */
+
+// $ as the number of the element it's in among its repeats, $$ two digits, $@- counting down, $@3 from 3
+func numbered(s, n) {
+    if (n == null || !s.contains("$")) {
+        return s;
+    }
+
+    let out = "";
+    let i = 0;
+    let c = "";
+    let width = 0;
+    let down = false;
+    let from = 1;
+    let digits = "";
+    while (i < len(s)) {
+        c = s[i];
+        if (c != "$") {
+            out += c;
+            i += 1;
+            continue;
+        }
+
+        width = 0;
+        while (i < len(s) && s[i] == "$") {
+            width += 1;
+            i += 1;
+        }
+        down = false;
+        from = 1;
+        if (i < len(s) && s[i] == "@") {
+            i += 1;
+            if (i < len(s) && s[i] == "-") {
+                down = true;
+                i += 1;
+            }
+            digits = "";
+            while (i < len(s) && is_digit(s[i])) {
+                digits += s[i];
+                i += 1;
+            }
+            if (len(digits) > 0) { from = number(digits); }
+        }
+        out += text(down ? from + n.count - n.index : from + n.index - 1).pad_left(width, "0");
+    }
+    return out;
+}
+
+// @doc The tree read out of an abbreviation as the elements it makes, repeats repeated, snippets and implied names filled in
+func expand(nodes, parent, n, made) {
+    let out = [];
+    for (node in nodes) {
+        for (i in range(node.count)) {
+            let each = node.count > 1 ? { index: i + 1, count: node.count } : n;
+            if (node.group) {
+                for (inner in expand(node.children, parent, each, made)) { out.push(inner); }
+                continue;
+            }
+
+            // Too many is said by expansion, a throw would switch the extension off
+            made.count += 1;
+            if (made.count > MOST) {
+                return out;
+            }
+
+            // Text on its own, {Hello}
+            if (node.name == "" && node.id == null && len(node.classes) == 0 && len(node.attrs) == 0 && node.text != null) {
+                out.push({ text_only: true, text: numbered(node.text, each) });
+                continue;
+            }
+
+            let name = numbered(node.name, each);
+            if (name == "") {
+                name = IMPLIED[parent] ?? (INLINE[parent] == true ? "span" : "div");
+            }
+
+            let snippet = snippet_of(name);
+            if (snippet != null) {
+                for (inner in from_snippet(snippet, node, parent, each, made)) { out.push(inner); }
+                continue;
+            }
+
+            out.push(element_of(node, name, parent, each, made));
+        }
+    }
+    return out;
+}
+
+// What a name stands for, an abbreviation, or null when it's just an element
+func snippet_of(name) {
+    if (SNIPPETS[name] != null) {
+        return SNIPPETS[name];
+    }
+    if (name.starts_with("input:")) {
+        let kind = name.substring(6);
+        return "input[type=" + (INPUT_TYPES[kind] ?? kind) + " name id]";
+    }
+    return null;
+}
+
+// A snippet written out, the id, classes, attributes and text of the element that named it on its first element, and
+// what was inside it in its deepest
+func from_snippet(snippet, node, parent, n, made) {
+    if (snippet == "!!!") {
+        return [{ text_only: true, text: "<!DOCTYPE html>" }];
+    }
+
+    let tree = parse(snippet);
+    let first = null;
+    for (top in tree) {
+        if (!top.group && first == null) { first = top; }
+    }
+    if (first != null) {
+        if (node.id != null) { first.id = node.id; }
+        for (named in node.classes) { first.classes.push(named); }
+        for (attr in node.attrs) { first.attrs.push(attr); }
+        if (node.text != null) { first.text = (first.text ?? "") + node.text; }
+    }
+    if (len(node.children) > 0 && len(tree) > 0) {
+        let deepest = deepest_of(tree[len(tree) - 1]);
+        for (child in node.children) { deepest.children.push(child); }
+    }
+    return expand(tree, parent, n, made);
+}
+
+func element_of(node, name, parent, n, made) {
+    // Its own attributes over the ones it always has, in the place those are written
+    let attrs = [];
+    for (pair in DEFAULTS[name] ?? []) {
+        attrs.push([pair[0], pair[1]]);
+    }
+    if (node.id != null) {
+        set_attr(attrs, "id", numbered(node.id, n));
+    }
+    if (len(node.classes) > 0) {
+        let classes = node.classes.map(func(named) { return numbered(named, n); });
+        set_attr(attrs, "class", classes.join(" "));
+    }
+    for (pair in node.attrs) {
+        set_attr(attrs, numbered(pair[0], n), numbered(pair[1], n));
+    }
+
+    return {
+        text_only: false,
+        name: name,
+        attrs: attrs,
+        text: node.text == null ? null : numbered(node.text, n),
+        children: expand(node.children, name, n, made)
+    };
+}
+
+func set_attr(attrs, name, value) {
+    for (pair in attrs) {
+        if (pair[0] == name) {
+            pair[1] = value;
+            return;
+        }
+    }
+    attrs.push([name, value]);
+}
+
+// Where the caret is to go, written where a value or an element is empty and taken out once the first one is found
+let STOP = "\0";
+
+// @doc HTML out of the elements expand made, a level indented by unit, with STOP where the caret could go
+func render(elements, unit, style) {
+    return render_siblings(elements, 0, unit, style);
+}
+
+func inline_node(e) {
+    if (e.text_only) {
+        return true;
+    }
+    if (INLINE[e.name] != true) {
+        return false;
+    }
+    return e.children.all(inline_node);
+}
+
+func render_siblings(elements, depth, unit, style) {
+    let all_inline = elements.all(inline_node);
+    let parts = elements.map(func(e) { return render_one(e, depth, unit, style); });
+    return all_inline ? parts.join("") : parts.join("\n" + unit.repeat(depth));
+}
+
+func render_one(e, depth, unit, style) {
+    if (e.text_only) {
+        return e.text;
+    }
+
+    let open = "<" + e.name;
+    for (pair in e.attrs) {
+        let name = style.jsx && pair[0] == "class" ? "className" : (style.jsx && pair[0] == "for" ? "htmlFor" : pair[0]);
+        open += " " + name + "=\"" + (pair[1] == "" ? STOP : pair[1]) + "\"";
+    }
+
+    if (VOID[e.name] == true) {
+        return open + (style.self_closing ? " />" : ">");
+    }
+    open += ">";
+    let close = "</" + e.name + ">";
+
+    let inside = [];
+    if (e.text != null) {
+        inside.push({ text_only: true, text: e.text });
+    }
+    for (child in e.children) { inside.push(child); }
+
+    if (len(inside) == 0) {
+        return open + STOP + close;
+    }
+    if (inside.all(inline_node)) {
+        return open + render_siblings(inside, depth + 1, unit, style) + close;
+    }
+    let lines = inside.map(func(child) { return render_one(child, depth + 1, unit, style); });
+    let indented = "\n" + unit.repeat(depth + 1);
+    return open + indented + lines.join(indented) + "\n" + unit.repeat(depth) + close;
+}
+
+/* Finding the abbreviation */
+
+// @doc Where the abbreviation that ends at a column of a line starts, from 0, the column itself when there's none
+func abbreviation_start(line, column) {
+    let at = column;
+    let braces = 0;
+    let brackets = 0;
+    let c = "";
+
+    while (at > 0) {
+        c = line[at - 1];
+        if (braces > 0) {
+            if (c == "}") { braces += 1; }
+            if (c == "{") { braces -= 1; }
+        } else if (brackets > 0) {
+            if (c == "]") { brackets += 1; }
+            if (c == "[") { brackets -= 1; }
+        } else if (c == "}") {
+            braces = 1;
+        } else if (c == "]") {
+            brackets = 1;
+        } else if (!(is_name_char(c) || c == "#" || c == "." || c == ">" || c == "+" || c == "^" || c == "*" || c == "(" || c == ")")) {
+            break;
+        }
+        at -= 1;
+    }
+    if (braces > 0 || brackets > 0) {
+        return column;
+    }
+
+    // Right after a tag that was written, <p>ul>li or <br/>p, the end of the tag isn't part of it
+    let before = at > 0 ? line[at - 1] : "";
+    if (before == "<" || before == "/" || before == "\"" || before == "'" || (at < column && line[at] == ">")) {
+        let close = line.substring(at, column).index_of(">");
+        if (close < 0) {
+            return column;
+        }
+        at += close + 1;
+    }
+    return at;
+}
+
+// Whether a column of a line is inside a tag being written, <div cla|, where Tab is better left to indent
+func inside_tag(line, column) {
+    let at = column - 1;
+    while (at >= 0) {
+        if (line[at] == ">") { return false; }
+        if (line[at] == "<") { return true; }
+        at -= 1;
+    }
+    return false;
+}
+
+// Whether an abbreviation is plainly one, so that Tab after an ordinary word in a paragraph is still a Tab
+func looks_like_one(abbreviation, nodes) {
+    for (c in [">", "+", "^", "*", "#", ".", "[", "{", "(", "!", ":"]) {
+        if (abbreviation.contains(c)) { return true; }
+    }
+    if (len(nodes) != 1 || nodes[0].group) {
+        return false;
+    }
+    let name = nodes[0].name;
+    return KNOWN[name] == true || SNIPPETS[name] != null;
+}
+
+// @doc Every element of HTML, the ones a lone word written out on Tab may be
+let KNOWN = {};
+for (name in ["a", "abbr", "address", "area", "article", "aside", "audio", "b", "base", "bdi", "bdo", "blockquote", "body",
+    "br", "button", "canvas", "caption", "cite", "code", "col", "colgroup", "data", "datalist", "dd", "del", "details",
+    "dfn", "dialog", "div", "dl", "dt", "em", "embed", "fieldset", "figcaption", "figure", "footer", "form", "h1", "h2",
+    "h3", "h4", "h5", "h6", "head", "header", "hgroup", "hr", "html", "i", "iframe", "img", "input", "ins", "kbd", "label",
+    "legend", "li", "link", "main", "map", "mark", "menu", "meta", "meter", "nav", "noscript", "object", "ol", "optgroup",
+    "option", "output", "p", "param", "picture", "pre", "progress", "q", "rp", "rt", "ruby", "s", "samp", "script",
+    "search", "section", "select", "slot", "small", "source", "span", "strong", "style", "sub", "summary", "sup", "svg",
+    "table", "tbody", "td", "template", "textarea", "tfoot", "th", "thead", "time", "title", "tr", "track", "u", "ul",
+    "var", "video", "wbr"]) {
+    KNOWN[name] = true;
+}
+
+/* Hex */
+
+// @doc An abbreviation written out, { text, caret } with the caret as how far into the text, or null when it isn't one
+func expansion(abbreviation, unit, style) {
+    let nodes = parse(abbreviation);
+    if (nodes == null || len(nodes) == 0) {
+        return null;
+    }
+    let made = { count: 0 };
+    let elements = expand(nodes, "", null, made);
+    if (made.count > MOST) {
+        return { text: "", caret: 0, nodes: nodes, too_many: true };
+    }
+    let written = render(elements, unit, style);
+    let caret = written.index_of(STOP);
+    return { text: written.replace(STOP, ""), caret: caret < 0 ? len(written) : caret, nodes: nodes, too_many: false };
+}
+
+func ending_of(file) {
+    if (file == null) { return ""; }
+    let dot = -1;
+    for (i in range(len(file))) {
+        if (file[i] == ".") { dot = i; }
+        if (file[i] == "/" || file[i] == "\\") { dot = -1; }
+    }
+    return dot < 0 ? "" : file.substring(dot).lower();
+}
+
+// Writes out the abbreviation before the caret of the file on screen, true when there was one
+func expand_at_caret(hex, file, from_tab) {
+    let caret = hex.caret();
+    if (caret == null || caret.selected != "") {
+        return false;
+    }
+
+    let line = caret.text;
+    let column = caret.column - 1;
+    if (from_tab && inside_tag(line, column)) {
+        return false;
+    }
+    let start = abbreviation_start(line, column);
+    if (start >= column) {
+        return false;
+    }
+
+    let abbreviation = line.substring(start, column);
+    let ending = ending_of(file);
+    let size = hex.setting("indent");
+    let unit = size > 0 ? " ".repeat(size) : "\t";
+    let style = { jsx: ending == ".jsx" || ending == ".tsx", self_closing: ending == ".jsx" || ending == ".tsx" || ending == ".xhtml" || ending == ".xml" };
+    let made = expansion(abbreviation, unit, style);
+    if (made == null || (from_tab && !looks_like_one(abbreviation, made.nodes))) {
+        return false;
+    }
+    if (made.too_many) {
+        hex.say("that abbreviation makes more than " + MOST + " elements, it was left as it is");
+        return true;
+    }
+
+    // Every line after the first as indented as the one it was typed on
+    let indent = 0;
+    while (indent < len(line) && (line[indent] == " " || line[indent] == "\t")) {
+        indent += 1;
+    }
+    let margin = line.substring(0, indent);
+    let written = made.text.replace("\n", "\n" + margin);
+    let caret_at = made.text.substring(0, made.caret).replace("\n", "\n" + margin);
+    hex.replace_text({ line: caret.line, column: start + 1 }, { line: caret.line, column: caret.column }, written, len(caret_at));
+    return true;
+}
+
+func on_start(hex) {
+    hex.command("Expand abbreviation", func(hex) {
+        if (!expand_at_caret(hex, hex.file(), false)) {
+            hex.say("no abbreviation before the caret");
+        }
+    }, "Ctrl+E");
+}
+
+// Tab in a file it's switched on for, the abbreviation before the caret written out if there's one
+func on_tab(hex, file) {
+    if (!hex.setting("tab")) {
+        return false;
+    }
+    let endings = hex.setting("files").lower().split(",");
+    if (!endings.contains(ending_of(file))) {
+        return false;
+    }
+    return expand_at_caret(hex, file, true);
+}
