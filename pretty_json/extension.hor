@@ -4,13 +4,17 @@
 //
 // Comments, the // and /* */ that tsconfig.json and VS Code's settings have, are read past rather than called wrong,
 // but a file with them isn't formatted, the formatting would lose them.
+//
+// A comma after the last item of an object or a list is fine too unless the setting says otherwise, every config file a
+// dev touches has one somewhere. Formatting writes it out without them, as JSON anything can read.
 let extension = {
     name: "Pretty JSON",
     description: "JSON formatted, minified, its keys sorted, and checked as it's saved.",
-    version: "1.0.0",
+    version: "1.1.0",
     author: "bogz",
     settings: {
         indent: { title: "Indent", about: "How many spaces a level is indented by, 0 for a tab.", kind: "number", default: 4 },
+        trailing_commas: { title: "Trailing commas", about: "Let the last item of an object or a list have a comma after it, the way JSONC and most dev tools do. Off, it's called wrong the way strict JSON calls it.", kind: "flag", default: true },
         check_on_save: { title: "Check on save", about: "Check a .json file every time it's saved, and say what's wrong with it in Problems.", kind: "flag", default: true }
     }
 };
@@ -26,9 +30,9 @@ func on_start(hex) {
     hex.command("Check JSON", func(hex) {
         let target = target_of(hex);
         if (target == null) { return; }
-        let read = parse(target.text);
+        let read = parse(target.text, hex.setting("trailing_commas"));
         if (read.error == null) {
-            hex.say("that's JSON, and nothing's wrong with it");
+            hex.say(read.trailing ? "that's JSON, with a comma after a last item that strict JSON wouldn't take" : "that's JSON, and nothing's wrong with it");
         } else {
             let at = place_of(target.text, read.error.offset, target.from);
             hex.say(`line {at.line}, column {at.column}, {read.error.message}`);
@@ -45,7 +49,7 @@ func on_save(hex, file) {
     if (len(text) > MOST) {
         return;
     }
-    let read = parse(text);
+    let read = parse(text, hex.setting("trailing_commas"));
     if (read.error == null) {
         hex.problems(file, []);
         return;
@@ -83,7 +87,7 @@ func target_of(hex) {
 func rewrite(hex, minify, sort_keys) {
     let target = target_of(hex);
     if (target == null) { return; }
-    let read = parse(target.text);
+    let read = parse(target.text, hex.setting("trailing_commas"));
     if (read.error != null) {
         let at = place_of(target.text, read.error.offset, target.from);
         hex.say(`not JSON, line {at.line}, column {at.column}, {read.error.message}`);
@@ -126,10 +130,10 @@ func place_of(text, offset, from) {
 
 /* Reading it */
 
-// @doc JSON read into a tree of what's in it, every number and text kept as written. { value, comments, error }, the
-// error { message, offset } of the first thing wrong
-func parse(text) {
-    let p = { s: text, at: 0, error: null, comments: false };
+// @doc JSON read into a tree of what's in it, every number and text kept as written, a comma after a last item let
+// through when trailing_ok says so. { value, comments, trailing, error }, the error { message, offset } of the first thing wrong
+func parse(text, trailing_ok) {
+    let p = { s: text, at: 0, error: null, comments: false, trailing_ok: trailing_ok, trailing: false };
     space(p);
     let value = read_value(p);
     if (p.error == null) {
@@ -138,7 +142,7 @@ func parse(text) {
             fail(p, "there's more after the end of it");
         }
     }
-    return { value: value, comments: p.comments, error: p.error };
+    return { value: value, comments: p.comments, trailing: p.trailing, error: p.error };
 }
 
 func fail(p, message) {
@@ -203,6 +207,12 @@ func read_object(p) {
     let key = null;
     while (p.error == null) {
         space(p);
+        // A comma and then the end, {"a": 1,}
+        if (p.trailing_ok && p.at < len(p.s) && p.s[p.at] == "}") {
+            p.at += 1;
+            p.trailing = true;
+            return node;
+        }
         if (p.at >= len(p.s) || p.s[p.at] != "\"") {
             return fail(p, p.at < len(p.s) && p.s[p.at] == "}" ? "a comma before the } with nothing after it" : "a key has to be a text in double quotes");
         }
@@ -239,7 +249,12 @@ func read_array(p) {
     while (p.error == null) {
         space(p);
         if (p.at < len(p.s) && p.s[p.at] == "]") {
-            return fail(p, "a comma before the ] with nothing after it");
+            if (!p.trailing_ok) {
+                return fail(p, "a comma before the ] with nothing after it");
+            }
+            p.at += 1;
+            p.trailing = true;
+            return node;
         }
         node.items.push(read_value(p));
         space(p);
