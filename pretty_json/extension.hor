@@ -10,10 +10,10 @@
 let extension = {
     name: "Pretty JSON",
     description: "JSON formatted, minified, its keys sorted, and checked as it's saved.",
-    version: "1.1.0",
+    version: "1.1.1",
     author: "bogz",
     settings: {
-        indent: { title: "Indent", about: "How many spaces a level is indented by, 0 for a tab.", kind: "number", default: 4 },
+        indent: { title: "Indent", about: "How many spaces a level is indented by, 0 for a tab.", kind: "number", least: 0, most: 8, step: 1, slider: true, default: 4 },
         trailing_commas: { title: "Trailing commas", about: "Let the last item of an object or a list have a comma after it, the way JSONC and most dev tools do. Off, it's called wrong the way strict JSON calls it.", kind: "flag", default: true },
         check_on_save: { title: "Check on save", about: "Check a .json file every time it's saved, and say what's wrong with it in Problems.", kind: "flag", default: true }
     }
@@ -24,12 +24,12 @@ let extension = {
 let MOST = 60000;
 
 func on_start(hex) {
-    hex.command("Format JSON", func(hex) { rewrite(hex, false, false); });
-    hex.command("Format JSON, keys sorted", func(hex) { rewrite(hex, false, true); });
-    hex.command("Minify JSON", func(hex) { rewrite(hex, true, false); });
-    hex.command("Check JSON", func(hex) {
+    hex.command("Format JSON", hex => { rewrite(hex, false, false); });
+    hex.command("Format JSON, keys sorted", hex => { rewrite(hex, false, true); });
+    hex.command("Minify JSON", hex => { rewrite(hex, true, false); });
+    hex.command("Check JSON", hex => {
         let target = target_of(hex);
-        if (target == null) { return; }
+        if (target == null) return;
         let read = parse(target.text, hex.setting("trailing_commas"));
         if (read.error == null) {
             hex.say(read.trailing ? "that's JSON, with a comma after a last item that strict JSON wouldn't take" : "that's JSON, and nothing's wrong with it");
@@ -42,13 +42,9 @@ func on_start(hex) {
 }
 
 func on_save(hex, file) {
-    if (!hex.setting("check_on_save") || !file.lower().ends_with(".json")) {
-        return;
-    }
+    if (!hex.setting("check_on_save") || !file.lower().ends_with(".json")) return;
     let text = hex.read(file);
-    if (len(text) > MOST) {
-        return;
-    }
+    if (len(text) > MOST) return;
     let read = parse(text, hex.setting("trailing_commas"));
     if (read.error == null) {
         hex.problems(file, []);
@@ -67,15 +63,13 @@ func target_of(hex) {
         return null;
     }
     let s = hex.selection();
-    if (s == null) {
-        return null;
-    }
+    if (s == null) return null;
     let target = null;
     if (s.text != "") {
         target = { text: s.text, from: s.from, to: s.to, whole: false };
     } else {
         let lines = hex.lines();
-        target = { text: lines.join("\n"), from: { line: 1, column: 1 }, to: { line: len(lines), column: len(lines[len(lines) - 1]) + 1 }, whole: true };
+        target = { text: lines.join("\n"), from: { line: 1, column: 1 }, to: { line: len(lines), column: len(lines[-1]) + 1 }, whole: true };
     }
     if (len(target.text) > MOST) {
         hex.say(`that's more than {MOST} characters, too much for an extension to get through in the second Hex gives it`);
@@ -86,7 +80,7 @@ func target_of(hex) {
 
 func rewrite(hex, minify, sort_keys) {
     let target = target_of(hex);
-    if (target == null) { return; }
+    if (target == null) return;
     let read = parse(target.text, hex.setting("trailing_commas"));
     if (read.error != null) {
         let at = place_of(target.text, read.error.offset, target.from);
@@ -138,17 +132,13 @@ func parse(text, trailing_ok) {
     let value = read_value(p);
     if (p.error == null) {
         space(p);
-        if (p.at < len(p.s)) {
-            fail(p, "there's more after the end of it");
-        }
+        if (p.at < len(p.s)) fail(p, "there's more after the end of it");
     }
     return { value: value, comments: p.comments, trailing: p.trailing, error: p.error };
 }
 
 func fail(p, message) {
-    if (p.error == null) {
-        p.error = { message: message, offset: p.at };
-    }
+    if (p.error == null) p.error = { message: message, offset: p.at };
     return null;
 }
 
@@ -161,15 +151,15 @@ func space(p) {
     let c = "";
     while (at < n) {
         c = s[at];
-        if (c == " " || c == "\n" || c == "\r" || c == "\t") {
+        if (c in " \n\r\t") {
             at += 1;
         } else if (c == "/" && at + 1 < n && s[at + 1] == "/") {
             p.comments = true;
-            while (at < n && s[at] != "\n") { at += 1; }
+            while (at < n && s[at] != "\n") at += 1;
         } else if (c == "/" && at + 1 < n && s[at + 1] == "*") {
             p.comments = true;
             at += 2;
-            while (at + 1 < n && !(s[at] == "*" && s[at + 1] == "/")) { at += 1; }
+            while (at + 1 < n && !(s[at] == "*" && s[at + 1] == "/")) at += 1;
             at += 2;
         } else {
             break;
@@ -179,14 +169,12 @@ func space(p) {
 }
 
 func read_value(p) {
-    if (p.at >= len(p.s)) {
-        return fail(p, "it ends where a value should be");
-    }
+    if (p.at >= len(p.s)) return fail(p, "it ends where a value should be");
     let c = p.s[p.at];
-    if (c == "{") { return read_object(p); }
-    if (c == "[") { return read_array(p); }
-    if (c == "\"") { return read_string(p); }
-    if (c == "-" || (c >= "0" && c <= "9")) { return read_number(p); }
+    if (c == "{") return read_object(p);
+    if (c == "[") return read_array(p);
+    if (c == "\"") return read_string(p);
+    if (c == "-" || c.is_digit()) return read_number(p);
     for (word in ["true", "false", "null"]) {
         if (p.s.substring(p.at, p.at + len(word)) == word) {
             p.at += len(word);
@@ -213,14 +201,10 @@ func read_object(p) {
             p.trailing = true;
             return node;
         }
-        if (p.at >= len(p.s) || p.s[p.at] != "\"") {
-            return fail(p, p.at < len(p.s) && p.s[p.at] == "}" ? "a comma before the } with nothing after it" : "a key has to be a text in double quotes");
-        }
+        if (p.at >= len(p.s) || p.s[p.at] != "\"") return fail(p, p.at < len(p.s) && p.s[p.at] == "}" ? "a comma before the } with nothing after it" : "a key has to be a text in double quotes");
         key = read_string(p);
         space(p);
-        if (p.at >= len(p.s) || p.s[p.at] != ":") {
-            return fail(p, "a : should come after the key");
-        }
+        if (p.at >= len(p.s) || p.s[p.at] != ":") return fail(p, "a : should come after the key");
         p.at += 1;
         space(p);
         node.keys.push(key);
@@ -249,9 +233,7 @@ func read_array(p) {
     while (p.error == null) {
         space(p);
         if (p.at < len(p.s) && p.s[p.at] == "]") {
-            if (!p.trailing_ok) {
-                return fail(p, "a comma before the ] with nothing after it");
-            }
+            if (!p.trailing_ok) return fail(p, "a comma before the ] with nothing after it");
             p.at += 1;
             p.trailing = true;
             return node;
@@ -301,11 +283,8 @@ func read_number(p) {
     let c = "";
     while (at < n) {
         c = s[at];
-        if ((c >= "0" && c <= "9") || c == "-" || c == "+" || c == "." || c == "e" || c == "E") {
-            at += 1;
-        } else {
-            break;
-        }
+        if (c.is_digit() || c in "-+.eE") at += 1;
+        else break;
     }
     p.at = at;
     let raw = s.substring(start, at);
@@ -326,20 +305,18 @@ func write(node, unit, depth, out, minify, sort_keys) {
             return;
         }
         let order = range(len(node.keys));
-        if (sort_keys) {
-            order.sort(func(i) { return node.keys[i].raw; });
-        }
+        if (sort_keys) order.sort(i => node.keys[i].raw);
         out.push("{");
         let first = true;
         for (i in order) {
-            if (!first) { out.push(","); }
+            if (!first) out.push(",");
             first = false;
-            if (!minify) { out.push("\n" + unit.repeat(depth + 1)); }
+            if (!minify) out.push("\n" + unit.repeat(depth + 1));
             out.push(node.keys[i].raw);
             out.push(minify ? ":" : ": ");
             write(node.values[i], unit, depth + 1, out, minify, sort_keys);
         }
-        if (!minify) { out.push("\n" + unit.repeat(depth)); }
+        if (!minify) out.push("\n" + unit.repeat(depth));
         out.push("}");
         return;
     }
@@ -349,12 +326,12 @@ func write(node, unit, depth, out, minify, sort_keys) {
             return;
         }
         out.push("[");
-        for (i in range(len(node.items))) {
-            if (i > 0) { out.push(","); }
-            if (!minify) { out.push("\n" + unit.repeat(depth + 1)); }
-            write(node.items[i], unit, depth + 1, out, minify, sort_keys);
+        for (i, item in node.items) {
+            if (i > 0) out.push(",");
+            if (!minify) out.push("\n" + unit.repeat(depth + 1));
+            write(item, unit, depth + 1, out, minify, sort_keys);
         }
-        if (!minify) { out.push("\n" + unit.repeat(depth)); }
+        if (!minify) out.push("\n" + unit.repeat(depth));
         out.push("]");
         return;
     }

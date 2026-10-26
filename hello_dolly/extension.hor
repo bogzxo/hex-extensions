@@ -50,7 +50,7 @@ let welcome_greetings = [
 // Hex calls this once it starts up, with what it lets an extension do. A greeting, and a command in the palette for another
 func on_start(hex) {
 	hex.title_note(math.pick(welcome_greetings));
-	hex.command("Another greeting", func(hex) {
+	hex.command("Another greeting", hex => {
 		hex.title_note(math.pick(welcome_greetings));
 	});
 }

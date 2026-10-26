@@ -61,7 +61,7 @@ func reverse_of(state, entry, undoing) {
     }
 
     for (file in entry.files) {
-        if (undoing) { state.hex.undo_file(file); } else { state.hex.redo_file(file); }
+        if (undoing) state.hex.undo_file(file); else state.hex.redo_file(file);
     }
     return entry;
 }
@@ -70,20 +70,13 @@ func reverse_of(state, entry, undoing) {
 
 func path_of(id) { return ["moves", id]; }
 
-// An object of one key, for a key that's in a variable
-func one_key(key, value) {
-    let made = {};
-    made[key] = value;
-    return made;
-}
-
 func written(state, id) { return state.moves[id]; }
 
 // @doc A key of a move set, written where it is or put in where the order of the keys says
 func set_key(state, id, key, value) {
     let at = written(state, id);
     let path = path_of(id);
-    let why = has(at.move, key)
+    let why = key in at.move
         ? state.hex.edit(at.file, [...path, key], value)
         : state.hex.insert(at.file, path, key, value, schema.key_after(at.move, key));
     return done(state, [at.file], why);
@@ -91,14 +84,14 @@ func set_key(state, id, key, value) {
 
 func clear_key(state, id, key) {
     let at = written(state, id);
-    if (!has(at.move, key)) { return true; }
+    if (!(key in at.move)) return true;
     return done(state, [at.file], state.hex.remove(at.file, [...path_of(id), key]));
 }
 
 func set_phase_key(state, id, phase, key, value) {
     let at = written(state, id);
     let path = [...path_of(id), "phases", phase];
-    let why = has(at.move.phases[phase], key)
+    let why = key in at.move.phases[phase]
         ? state.hex.edit(at.file, [...path, key], value)
         : state.hex.insert(at.file, path, key, value, phase_key_after(at.move.phases[phase], key));
     return done(state, [at.file], why);
@@ -116,7 +109,7 @@ func write_phase_key(state, id, phase, key, value, there) {
 
 func clear_phase_key(state, id, phase, key) {
     let at = written(state, id);
-    if (!has(at.move.phases[phase], key)) { return true; }
+    if (!(key in at.move.phases[phase])) return true;
     return done(state, [at.file], state.hex.remove(at.file, [...path_of(id), "phases", phase, key]));
 }
 
@@ -142,8 +135,8 @@ func set_reroute(state, id, kind, stance, target) {
     let path = [...path_of(id), kind];
     let routes = at.move[kind];
     let why = routes == null
-        ? state.hex.insert(at.file, path_of(id), kind, one_key(stance, target), schema.key_after(at.move, kind))
-        : has(routes, stance)
+        ? state.hex.insert(at.file, path_of(id), kind, { [stance]: target }, schema.key_after(at.move, kind))
+        : stance in routes
             ? state.hex.edit(at.file, [...path, stance], target)
             : state.hex.insert(at.file, path, stance, target, null);
     return done(state, [at.file], why);
@@ -152,7 +145,7 @@ func set_reroute(state, id, kind, stance, target) {
 func clear_reroute(state, id, kind, stance) {
     let at = written(state, id);
     let routes = at.move[kind];
-    if (routes == null || !has(routes, stance)) { return true; }
+    if (routes == null || !(stance in routes)) return true;
 
     // The last of them takes the object with it
     let path = len(keys(routes)) == 1 ? [...path_of(id), kind] : [...path_of(id), kind, stance];
@@ -174,7 +167,7 @@ func upgrade(state, id, rate) {
         let made = old_knockback(move.knockback);
         let key = made.launch != null ? "launch" : "push";
         let value = made.launch != null ? made.launch : made.push;
-        if (has(move, key)) {
+        if (key in move) {
             // it says the new one already, the old one goes
             changes.push({ remove: [...path, "knockback"] });
         } else {
@@ -187,7 +180,7 @@ func upgrade(state, id, rate) {
         let walk = move.steering == false ? 0 : math.clamp(move.walk_scale, 0, 1);
         changes.push({ rename: [...path, "walk_scale"], key: "walk" });
         changes.push({ edit: [...path, "walk"], value: walk });
-        if (move.steering != null) { changes.push({ remove: [...path, "steering"] }); }
+        if (move.steering != null) changes.push({ remove: [...path, "steering"] });
     } else if (move.steering != null) {
         changes.push({ rename: [...path, "steering"], key: "walk" });
         changes.push({ edit: [...path, "walk"], value: move.steering == false ? 0 : 1 });
@@ -203,8 +196,7 @@ func upgrade(state, id, rate) {
         }
     }
 
-    for (name in move.phases ?? {}) {
-        let phase = move.phases[name];
+    for (name, phase in move.phases ?? {}) {
         if (phase.hold != null) {
             let at_phase = [...path, "phases", name];
             if (phase.hold <= 1 || phase.art_speed != null) {
@@ -216,7 +208,7 @@ func upgrade(state, id, rate) {
         }
     }
 
-    if (len(changes) == 0) { return true; }
+    if (len(changes) == 0) return true;
     return done(state, [at.file], state.hex.edits(at.file, changes));
 }
 
@@ -232,10 +224,10 @@ func old_knockback(knockback) {
 // @doc Whether a move still says something the way the first format did
 func outdated(move) {
     for (key in move) {
-        if (has(schema.GONE, key)) { return true; }
+        if (key in schema.GONE) return true;
     }
     for (name in move.phases ?? {}) {
-        if (move.phases[name].hold != null) { return true; }
+        if (move.phases[name].hold != null) return true;
     }
     return false;
 }
@@ -243,9 +235,9 @@ func outdated(move) {
 /* Phases */
 
 func free_name(taken, base) {
-    if (!has(taken, base)) { return base; }
+    if (!(base in taken)) return base;
     let number = 2;
-    while (has(taken, `{base}_{number}`)) { number = number + 1; }
+    while (`{base}_{number}` in taken) number = number + 1;
     return `{base}_{number}`;
 }
 
@@ -255,7 +247,7 @@ func add_phase(state, id, next_to, before, made) {
     let phases = at.move.phases ?? {};
     let name = free_name(phases, before ? "windup" : "follow");
     if (at.move.phases == null) {
-        return done(state, [at.file], state.hex.insert(at.file, path_of(id), "phases", one_key(name, made), null));
+        return done(state, [at.file], state.hex.insert(at.file, path_of(id), "phases", { [name]: made }, null));
     }
 
     let order = keys(phases);
@@ -263,7 +255,7 @@ func add_phase(state, id, next_to, before, made) {
     order.insert(place, name);
     let path = [...path_of(id), "phases"];
     let why = state.hex.edits(at.file, [{ insert: path, key: name, value: made }, { reorder: path, keys: order }]);
-    if (done(state, [at.file], why)) { state.phase = name; }
+    if (done(state, [at.file], why)) state.phase = name;
     return why == null;
 }
 
@@ -287,7 +279,7 @@ func move_phase(state, id, phase, by) {
     let order = keys(at.move.phases);
     let from = order.index_of(phase);
     let to = from + by;
-    if (to < 0 || to >= len(order)) { return false; }
+    if (to < 0 || to >= len(order)) return false;
 
     order.remove_at(from);
     order.insert(to, phase);
@@ -303,7 +295,7 @@ func reorder_phases(state, id, order) {
 func rename_phase(state, id, phase, name) {
     let at = written(state, id);
     let why = state.hex.rename(at.file, [...path_of(id), "phases", phase], name);
-    if (done(state, [at.file], why)) { state.phase = name; }
+    if (done(state, [at.file], why)) state.phase = name;
     return why == null;
 }
 
@@ -314,7 +306,7 @@ func new_move(state, id, made, after, file) {
     let into = after != null ? written(state, after).file : file;
     let why = state.hex.insert(into, ["moves"], id, made, after);
     let went = done(state, [into], why);
-    if (went) { state.move = id; }
+    if (went) state.move = id;
     return went;
 }
 
@@ -337,11 +329,11 @@ func rename_move(state, id, name, files) {
         let changes = reroutes_to(state, file, id, name);
         if (len(changes) > 0) {
             let more = state.hex.edits(file, changes);
-            if (more == null && touched.index_of(file) < 0) { touched.push(file); }
+            if (more == null && touched.index_of(file) < 0) touched.push(file);
         }
     }
 
-    if (has(state.boxes, id)) {
+    if (id in state.boxes) {
         record(state, { kind: "boxes", boxes: boxes_of.copy_all(state.boxes) });
         state.boxes[name] = state.boxes[id];
         state.boxes = boxes_of.without(state.boxes, id);
@@ -354,12 +346,11 @@ func rename_move(state, id, name, files) {
 // The edits that point every reroute in a file at a move to its new name
 func reroutes_to(state, file, id, name) {
     let changes = [];
-    for (other in state.moves) {
-        let at = state.moves[other];
+    for (other, at in state.moves) {
         if (at.file == file) {
             for (kind in ["stance_reroutes", "finish_reroutes"]) {
-                for (stance in at.move[kind] ?? {}) {
-                    if (at.move[kind][stance] == id) { changes.push({ edit: ["moves", other, kind, stance], value: name }); }
+                for (stance, target in at.move[kind] ?? {}) {
+                    if (target == id) changes.push({ edit: ["moves", other, kind, stance], value: name });
                 }
             }
         }
@@ -377,5 +368,5 @@ func delete_move(state, id) {
 // @doc The boxes of a move changed (null for none), what they were before kept for Ctrl+Z
 func change_boxes(state, id, boxes) {
     record(state, { kind: "boxes", boxes: boxes_of.copy_all(state.boxes) });
-    state.boxes = boxes == null ? boxes_of.without(state.boxes, id) : merge(state.boxes, one_key(id, boxes));
+    state.boxes = boxes == null ? boxes_of.without(state.boxes, id) : merge(state.boxes, { [id]: boxes });
 }

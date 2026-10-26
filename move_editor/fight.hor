@@ -13,14 +13,14 @@ func game_exe(hex, root) {
     if (told != "") {
         let path = is_absolute(told) ? told : `{root}/{told}`;
         for (name in ["Fighter2D.exe", "Fighter2D"]) {
-            if (hex.exists(`{path}/{name}`)) { return `{path}/{name}`; }
+            if (hex.exists(`{path}/{name}`)) return `{path}/{name}`;
         }
         return path;
     }
 
     for (build in ["bin/x64/Release/net10.0", "bin/x64/Debug/net10.0", "bin/Release/net10.0", "bin/Debug/net10.0"]) {
         for (name in ["Fighter2D.exe", "Fighter2D"]) {
-            if (hex.exists(`{root}/{build}/{name}`)) { return `{root}/{build}/{name}`; }
+            if (hex.exists(`{root}/{build}/{name}`)) return `{root}/{build}/{name}`;
         }
     }
     return null;
@@ -64,11 +64,11 @@ func fight(state, save) {
 func open_settings(hex, ui) {
     let game_path = ui.get("game_path");
     game_path.text = hex.setting("game");
-    game_path.on_changed = func(typed) {
+    game_path.on_changed = typed => {
         hex.set_setting("game", typed);
         show_found(hex, ui);
     };
-    game_path.on_button = func() { browse_game(hex, ui); };
+    game_path.on_button = () => { browse_game(hex, ui); };
 
     // The lists out of the game a move file was last opened in, the one that's set kept even if it isn't there
     let root = hex.setting("last_game");
@@ -77,18 +77,18 @@ func open_settings(hex, ui) {
 
     let dummy = ui.get("dummy");
     dummy.value = hex.setting("dummy");
-    dummy.on_changed = func(value) { hex.set_setting("dummy", dummy.value); };
+    dummy.on_changed = value => { hex.set_setting("dummy", dummy.value); };
     show_found(hex, ui);
 }
 
 // Look, Windows' dialog for the exe from the game's folder. One inside the game is kept from its folder
 func browse_game(hex, ui) {
     let root = hex.setting("last_game");
-    hex.pick_file({ title: "Where is Fighter2D?", folder: root ?? "", filter: ["Fighter2D (*.exe)", "*.exe"] }, func(picked) {
+    hex.pick_file({ title: "Where is Fighter2D?", folder: root ?? "", filter: ["Fighter2D (*.exe)", "*.exe"] }, picked => {
         let path = picked.replace("\\", "/");
         if (root != null) {
             let base = root.replace("\\", "/") + "/";
-            if (path.lower().starts_with(base.lower())) { path = path.substring(len(base)); }
+            if (path.lower().starts_with(base.lower())) path = path.substring(len(base));
         }
 
         ui.get("game_path").text = path;
@@ -99,10 +99,10 @@ func browse_game(hex, ui) {
 
 func pick_from(hex, dropdown, setting, choices) {
     let now = hex.setting(setting);
-    if (choices.index_of(now) < 0) { choices.insert(0, now); }
+    if (choices.index_of(now) < 0) choices.insert(0, now);
     dropdown.options = choices;
     dropdown.value = now;
-    dropdown.on_changed = func(value) { hex.set_setting(setting, value); };
+    dropdown.on_changed = value => { hex.set_setting(setting, value); };
 }
 
 func show_found(hex, ui) {

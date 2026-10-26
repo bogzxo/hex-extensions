@@ -6,7 +6,7 @@ let schema = include("schema.hor");
 let rules = include("rules.hor");
 
 func key_of(path) {
-    if (path == null) { return ""; }
+    if (path == null) return "";
     return path.replace("\\", "/").lower();
 }
 
@@ -20,17 +20,17 @@ func find_root(hex, file) {
 // @doc Every fighter of the game whose moves are in a file, or every one when none names it
 func fighters_of(hex, root, file) {
     let read = hex.try_load(`{root}/Assets/data/characters.hor`);
-    if (read.values == null) { return []; }
+    if (read.values == null) return [];
     let n = rules.load(hex, root);
 
     let using = [];
     let everybody = [];
     let characters = read.values.characters ?? {};
-    for (id in characters) {
-        let fighter = fighter_of(n, root, id, characters[id]);
+    for (id, character in characters) {
+        let fighter = fighter_of(n, root, id, character);
         everybody.push(fighter);
         for (file_of in fighter.files) {
-            if (same_path(file_of, file)) { using.push(fighter); }
+            if (same_path(file_of, file)) using.push(fighter);
         }
     }
 
@@ -39,7 +39,7 @@ func fighters_of(hex, root, file) {
 
 func fighter_of(n, root, id, character) {
     let files = [];
-    for (which in character.moves ?? {}) { files.push(`{root}/{character.moves[which]}`); }
+    for (which, path in character.moves ?? {}) files.push(`{root}/{path}`);
     return {
         id: id,
         name: character.pretty_name ?? id,
@@ -56,9 +56,9 @@ func fighter_of(n, root, id, character) {
 // @doc A fighter of the game by its id, null for one characters.hor hasn't got
 func fighter_by_id(hex, root, id) {
     let read = root == null || id == null ? null : hex.try_load(`{root}/Assets/data/characters.hor`);
-    if (read == null || read.values == null) { return null; }
+    if (read == null || read.values == null) return null;
     let characters = read.values.characters ?? {};
-    return has(characters, id) ? fighter_of(rules.load(hex, root), root, id, characters[id]) : null;
+    return id in characters ? fighter_of(rules.load(hex, root), root, id, characters[id]) : null;
 }
 
 // @doc
@@ -77,10 +77,10 @@ func load_moves(hex, files) {
             errors[file] = read.error;
         } else {
             by_file[file] = read.values.moves ?? {};
-            for (id in read.values.moves ?? {}) {
+            for (id, move in read.values.moves ?? {}) {
                 let earlier = moves[id];
-                if (earlier == null) { ids.push(id); }
-                moves[id] = { move: read.values.moves[id], file: file, replaces: earlier == null ? null : earlier.file };
+                if (earlier == null) ids.push(id);
+                moves[id] = { move: move, file: file, replaces: earlier == null ? null : earlier.file };
             }
         }
     }
@@ -90,15 +90,15 @@ func load_moves(hex, files) {
 
 // @doc What kind of move it is, which of the groups of the list it goes in
 func kind_of(id, move) {
-    if (schema.GAME_MOVES.index_of(id) >= 0) { return "the game's"; }
-    if ((move.meter_cost ?? 0) > 0) { return "specials"; }
-    if ((move.damage ?? 0) > 0 || hits(move)) { return "attacks"; }
+    if (schema.GAME_MOVES.index_of(id) >= 0) return "the game's";
+    if ((move.meter_cost ?? 0) > 0) return "specials";
+    if ((move.damage ?? 0) > 0 || hits(move)) return "attacks";
     return "movement";
 }
 
 func hits(move) {
-    for (name in move.phases ?? {}) {
-        if (move.phases[name].hit != null) { return true; }
+    for (name, phase in move.phases ?? {}) {
+        if (phase.hit != null) return true;
     }
     return false;
 }
@@ -121,5 +121,5 @@ func character_ids(hex, root) {
 // @doc A file's name without its folders, for saying where a move is written
 func file_name(path) {
     let parts = path.replace("\\", "/").split("/");
-    return parts[len(parts) - 1];
+    return parts[-1];
 }

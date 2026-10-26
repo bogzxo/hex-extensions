@@ -14,8 +14,7 @@ func problem(path, message, warning) { return { path: path, message: message, wa
 // whose art a length is of (a shared file's move can be fine for one and not for another), and rate its frame rate
 func check_file(file, moves, merged, art, boxes, who, rate) {
     let found = [];
-    for (id in moves) {
-        let move = moves[id];
+    for (id, move in moves) {
         let at = ["moves", id];
         check_keys(found, at, move, schema.move_keys(), "a move");
         check_move_values(found, at, move);
@@ -23,8 +22,7 @@ func check_file(file, moves, merged, art, boxes, who, rate) {
         check_hit_cancel(found, at, move, merged);
         check_hit(found, at, id, move, art, boxes, who, rate);
 
-        for (name in move.phases ?? {}) {
-            let phase = move.phases[name];
+        for (name, phase in move.phases ?? {}) {
             let phase_at = [...at, "phases", name];
             check_keys(found, phase_at, phase, schema.phase_keys(), "a phase");
             check_phase(found, phase_at, phase, art, who, rate);
@@ -36,7 +34,7 @@ func check_file(file, moves, merged, art, boxes, who, rate) {
 // @doc What's wrong with a fighter's moves as a whole, put on the last of its files (its own)
 func check_fighter(merged) {
     let found = [];
-    if (!has(merged.moves, "idle")) {
+    if (!("idle" in merged.moves)) {
         found.push(problem(["moves"], "the fighter has no idle, the game needs one for when nothing is done", false));
     }
     return found;
@@ -46,9 +44,9 @@ func check_fighter(merged) {
 
 func check_keys(found, at, object, known, what) {
     for (key in object) {
-        if (has(schema.RENAMED, key)) {
+        if (key in schema.RENAMED) {
             found.push(problem([...at, key], `{key} is what {schema.RENAMED[key]} was called, it still reads but say {schema.RENAMED[key]}`, true));
-        } else if (has(schema.GONE, key)) {
+        } else if (key in schema.GONE) {
             found.push(problem([...at, key], `{key} isn't a thing any more, the game won't load it. Say {schema.GONE[key]}, the Move tab's "Say it the new way" does it`, false));
         } else if (known.index_of(key) < 0) {
             found.push(problem([...at, key], `{what} hasn't got a {key}, the game won't load it`, false));
@@ -73,12 +71,12 @@ func check_move_values(found, at, move) {
     check_choice(found, at, move, "kind", schema.KINDS);
 
     for (stance in parts(move.stances)) {
-        if (schema.STANCES.index_of(stance) < 0) { found.push(problem([...at, "stances"], `{stance} isn't a stance`, false)); }
+        if (schema.STANCES.index_of(stance) < 0) found.push(problem([...at, "stances"], `{stance} isn't a stance`, false));
     }
 
     for (either in parts(move.input)) {
         for (button in either.split("+")) {
-            if (schema.BUTTONS.index_of(button.trim()) < 0) { found.push(problem([...at, "input"], `{button.trim()} isn't a button`, false)); }
+            if (schema.BUTTONS.index_of(button.trim()) < 0) found.push(problem([...at, "input"], `{button.trim()} isn't a button`, false));
         }
     }
 
@@ -113,7 +111,7 @@ func check_move_values(found, at, move) {
 // the moves of a shared file can be for a fighter that has one
 func check_hit_cancel(found, at, move, merged) {
     for (id in schema.hit_cancels(move.hit_cancel)) {
-        if (id == "any" || has(merged.moves, id)) { continue; }
+        if (id == "any" || id in merged.moves) continue;
         if (schema.KINDS.index_of(id) < 0) {
             found.push(problem([...at, "hit_cancel"], `the fighter has no {id} to cancel into, and it isn't a kind of move ({schema.KINDS.join(", ")}) or any`, false));
         } else if (!has_kind(merged, id)) {
@@ -123,28 +121,27 @@ func check_hit_cancel(found, at, move, merged) {
 }
 
 func has_kind(merged, kind) {
-    for (id in merged.moves) {
-        if (rules.kind_of(merged.moves[id].move) == kind) { return true; }
+    for (id, at in merged.moves) {
+        if (rules.kind_of(at.move) == kind) return true;
     }
     return false;
 }
 
 // "a | b", or a list of them, as its parts
 func parts(value) {
-    if (value == null) { return []; }
-    if (typeof(value) == "list") { return value; }
+    if (value == null) return [];
+    if (typeof(value) == "list") return value;
     let made = [];
-    for (part in text(value).split("|")) { made.push(part.trim()); }
+    for (part in text(value).split("|")) made.push(part.trim());
     return made;
 }
 
 func check_reroutes(found, at, move, merged) {
     for (kind in ["stance_reroutes", "finish_reroutes"]) {
-        for (stance in move[kind] ?? {}) {
-            let target = move[kind][stance];
+        for (stance, target in move[kind] ?? {}) {
             if (schema.STANCES.index_of(stance) < 0) {
                 found.push(problem([...at, kind, stance], `{stance} isn't a stance`, false));
-            } else if (!has(merged.moves, target)) {
+            } else if (!(target in merged.moves)) {
                 found.push(problem([...at, kind, stance], `the fighter has no {target} to go to`, false));
             }
         }

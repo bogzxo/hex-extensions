@@ -24,11 +24,11 @@ let CONE = vec(0.6, 0.9, 1.0, 0.25);
 // many frames that is before their hitstun ends (minus for after), jump where a full jump straight away gets to and di
 // the two flights at the edges of DI's cone, [up, down], null for a hit that doesn't launch
 func window(state) {
-    if (state.move == null || state.laid.hit < 0 || state.rules == null) { return null; }
+    if (state.move == null || state.laid.hit < 0 || state.rules == null) return null;
     let n = state.rules;
     let move = state.moves[state.move].move;
     let data = rules.frame_data(n, state.laid, move);
-    if (data == null) { return null; }
+    if (data == null) return null;
 
     let victim = state.victim ?? state.fighter;
     let movement = victim == null || victim.movement == null ? n.movement : victim.movement;
@@ -51,7 +51,7 @@ func window(state) {
 // phase with the jump in it
 func jump_of(state, move, act, flown) {
     let into = schema.hit_cancels(move.hit_cancel);
-    if (into.index_of("jump") < 0 && into.index_of("any") < 0) { return null; }
+    if (into.index_of("jump") < 0 && into.index_of("any") < 0) return null;
 
     let own = state.fighter == null || state.fighter.movement == null ? state.rules.movement : state.fighter.movement;
     let jump = state.moves["jump"];
@@ -63,9 +63,8 @@ func jump_of(state, move, act, flown) {
 
 // @doc The combo window written out, markdown, "" for nothing to say
 func describe(combo) {
-    if (combo == null) { return ""; }
-    let move = combo.move;
-    let flown = combo.flown;
+    if (combo == null) return "";
+    let { move, flown } = combo;
     let who = combo.victim == null ? "they" : combo.victim.name;
     let lines = ["**Combo window**"];
 
@@ -115,8 +114,8 @@ func di_line(combo) {
 func free_line(combo) {
     let how = combo.how == "hit_cancel" ? "by hit_cancel" : combo.how == "cancel" ? "by its cancel frame" : "at the end of the move";
     let height = combo.flown.launched ? `, they're {rules.units(combo.at.y)} up` : "";
-    if (combo.free > 0) { return `Free {count(combo.act)} after the hit {how}, **{count(combo.free)} before they recover**{height}.`; }
-    if (combo.free == 0) { return `Free {count(combo.act)} after the hit {how}, the same frame they recover{height}.`; }
+    if (combo.free > 0) return `Free {count(combo.act)} after the hit {how}, **{count(combo.free)} before they recover**{height}.`;
+    if (combo.free == 0) return `Free {count(combo.act)} after the hit {how}, the same frame they recover{height}.`;
     return `Free {count(combo.act)} after the hit {how}, **{count(-combo.free)} after they've recovered**{height}.`;
 }
 
@@ -128,7 +127,7 @@ func count(frames) { return frames == 1 ? "1 frame" : `{frames} frames`; }
 func draw(state, combo) {
     let drawing = state.ui.get("combo_arc");
     drawing.clear();
-    if (combo == null) { return; }
+    if (combo == null) return;
 
     let points = combo.flown.points;
     let far = 30;
@@ -144,7 +143,7 @@ func draw(state, combo) {
     let scale = math.min((size.x - 40) / far, (size.y - 34) / high);
     let origin = vec(-size.x / 2 + 16, -size.y / 2 + 14);
     drawing.line(vec(-size.x / 2, origin.y), vec(size.x / 2, origin.y), 1, GROUND);
-    if (combo.di != null) { cone(drawing, combo, origin, scale); }
+    if (combo.di != null) cone(drawing, combo, origin, scale);
     path(drawing, points, origin, scale, combo.data.hitstun);
 
     mark(drawing, points, origin, scale, combo.act, combo.free >= 0 ? FREE : RECOVERS, `free {combo.act}`);

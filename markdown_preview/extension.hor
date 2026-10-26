@@ -19,7 +19,7 @@ func on_start(hex) {
         icon: "open-preview",
         layout: "preview.hor",
         when: ".md, .markdown",
-        open: func(ui, file) { show(hex, ui, file); },
+        open: (ui, file) => { show(hex, ui, file); },
         right: false
     });
 }
@@ -32,7 +32,5 @@ func show(hex, ui, file) {
 
 // The file typed into, its preview says what it says now
 func on_change(hex, file) {
-    if (previews[file] != null) {
-        previews[file].text = hex.read(file);
-    }
+    if (previews[file] != null) previews[file].text = hex.read(file);
 }

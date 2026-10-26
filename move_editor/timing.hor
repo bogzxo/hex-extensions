@@ -8,13 +8,13 @@ let TICK_RATE = 60;
 
 // @doc How many frames an animation of the art has, 1 for none or no art
 func frame_count(art, animation) {
-    if (animation == null || art == null || !art.has(animation)) { return 1; }
+    if (animation == null || art == null || !art.has(animation)) return 1;
     return math.max(1, art.frames(animation));
 }
 
 // @doc How many game frames a phase lasts, MovePhase.LengthFor. Its frames, or as long as what's left of its art takes
 func phase_length(art, phase, rate) {
-    if ((phase.frames ?? 0) > 0) { return phase.frames; }
+    if ((phase.frames ?? 0) > 0) return phase.frames;
     let length = phase.animation == null ? 1 : frame_count(art, phase.animation);
     let start = phase.start ?? 0;
     let left = length > start ? length - start : 1;
@@ -31,7 +31,7 @@ func natural_length(art, phase, rate) {
 
 // How far along its art a phase goes every game frame from a frame of the art on, MovePlayback.RateOf
 func rate_of(art, phase, animation, from, rate) {
-    if (phase.stretch != true || (phase.frames ?? 0) <= 0) { return rate / TICK_RATE * art_speed(phase); }
+    if (phase.stretch != true || (phase.frames ?? 0) <= 0) return rate / TICK_RATE * art_speed(phase);
     return math.max(1, frame_count(art, animation) - from) / phase.frames;
 }
 
@@ -39,10 +39,9 @@ func rate_of(art, phase, animation, from, rate) {
 // The hit's active frames, MoveList.Bake. What the phase with the hit says, or how many red boxes the hitbox file has
 // for the move (its active), or 1
 func active_frames(move, drawn) {
-    for (name in move.phases ?? {}) {
-        let phase = move.phases[name];
+    for (name, phase in move.phases ?? {}) {
         if (phase.hit != null) {
-            if ((phase.active ?? 0) > 0) { return phase.active; }
+            if ((phase.active ?? 0) > 0) return phase.active;
             break;
         }
     }
@@ -64,8 +63,7 @@ func lay_out(art, move, rate, drawn) {
     let hit = -1;
     let index = 0;
 
-    for (name in move.phases ?? {}) {
-        let phase = move.phases[name];
+    for (name, phase in move.phases ?? {}) {
         if (phase.animation != null) {
             animation = phase.animation;
             at = phase.start ?? 0;
@@ -79,12 +77,12 @@ func lay_out(art, move, rate, drawn) {
         phases.push({ name: name, first: first, length: length, animation: animation, loops: loops, waits: phase.until != null, stretch: phase.stretch == true });
 
         for (kind in ["hit", "cancel", "commit"]) {
-            if (phase[kind] != null) { marks.push({ kind: kind, frame: first + phase[kind], phase: name }); }
+            if (phase[kind] != null) marks.push({ kind: kind, frame: first + phase[kind], phase: name });
         }
 
         for (f in range(length)) {
             let is_hit = hit < 0 && phase.hit != null && f == phase.hit;
-            if (is_hit) { hit = len(frames); }
+            if (is_hit) hit = len(frames);
             frames.push({
                 phase: index, phase_name: name, animation: animation, shown: math.min(math.floor(at), last),
                 kind: "neutral", hit: is_hit, loops: loops
@@ -97,9 +95,7 @@ func lay_out(art, move, rate, drawn) {
     let active = active_frames(move, drawn);
     if (hit >= 0) {
         let end = hit + active;
-        for (i in range(len(frames))) {
-            frames[i].kind = i < hit ? "startup" : i < end ? "active" : "recovery";
-        }
+        for (i, frame in frames) frame.kind = i < hit ? "startup" : i < end ? "active" : "recovery";
     }
 
     return { frames: frames, hit: hit, active: active, phases: phases, marks: marks };
@@ -107,21 +103,21 @@ func lay_out(art, move, rate, drawn) {
 
 // @doc The phase a frame of the move is in, by name, null for none
 func phase_at(laid, frame) {
-    if (frame < 0 || frame >= len(laid.frames)) { return null; }
+    if (frame < 0 || frame >= len(laid.frames)) return null;
     return laid.frames[frame].phase_name;
 }
 
 // @doc The frame a phase starts on, -1 for a phase the move hasn't got
 func first_of(laid, name) {
     for (phase in laid.phases) {
-        if (phase.name == name) { return phase.first; }
+        if (phase.name == name) return phase.first;
     }
     return -1;
 }
 
 // @doc Which active frame a frame of the move is, from 0, -1 when it isn't one
 func active_index(laid, frame) {
-    if (laid.hit < 0 || frame < 0 || frame >= len(laid.frames)) { return -1; }
+    if (laid.hit < 0 || frame < 0 || frame >= len(laid.frames)) return -1;
     return laid.frames[frame].kind == "active" ? frame - laid.hit : -1;
 }
 
@@ -130,14 +126,14 @@ func active_index(laid, frame) {
 // however many of either there are. -1 off the active frames
 func box_index(laid, frame, count) {
     let active = active_index(laid, frame);
-    if (active < 0) { return -1; }
+    if (active < 0) return -1;
     return math.clamp(math.floor(active * count / math.max(1, laid.active)), 0, count - 1);
 }
 
 // @doc Which of a move's boxes a frame shows, its own on an active frame, the first before the hit and the last after
 func shown_index(laid, frame, count) {
     let box = box_index(laid, frame, count);
-    if (box >= 0) { return box; }
+    if (box >= 0) return box;
     return frame < laid.hit ? 0 : count - 1;
 }
 
@@ -146,17 +142,17 @@ func shown_index(laid, frame, count) {
 // or the end of the move. { frame, how }, how being "hit_cancel", "cancel" or "the end"
 func actionable(laid, move) {
     let total = len(laid.frames);
-    if (laid.hit < 0) { return { frame: total, how: "the end" }; }
-    if (move.hit_cancel != null && len(move.hit_cancel) > 0) { return { frame: laid.hit + 1, how: "hit_cancel" }; }
+    if (laid.hit < 0) return { frame: total, how: "the end" };
+    if (move.hit_cancel != null && len(move.hit_cancel) > 0) return { frame: laid.hit + 1, how: "hit_cancel" };
 
     // Cancellable from a cancel frame on, until a commit frame
     let open = false;
     for (f in range(total)) {
         for (mark in laid.marks) {
-            if (mark.frame == f && mark.kind == "cancel") { open = true; }
-            if (mark.frame == f && mark.kind == "commit") { open = false; }
+            if (mark.frame == f && mark.kind == "cancel") open = true;
+            if (mark.frame == f && mark.kind == "commit") open = false;
         }
-        if (open && f > laid.hit) { return { frame: f, how: "cancel" }; }
+        if (open && f > laid.hit) return { frame: f, how: "cancel" };
     }
     return { frame: total, how: "the end" };
 }
@@ -165,7 +161,7 @@ func actionable(laid, move) {
 func jump_frame(art, move, rate) {
     let laid = lay_out(art, move, rate, 0);
     for (phase in laid.phases) {
-        if (move.phases[phase.name].jump != null) { return phase.first; }
+        if (move.phases[phase.name].jump != null) return phase.first;
     }
     return -1;
 }

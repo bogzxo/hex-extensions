@@ -23,8 +23,8 @@ let builtin_snippets = include("snippets.hor").builtin_snippets;
 let session = null;
 
 func on_start(hex) {
-    hex.command("Insert snippet...", func(hex) { pick(hex); });
-    hex.command("Edit my snippets", func(hex) {
+    hex.command("Insert snippet...", hex => { pick(hex); });
+    hex.command("Edit my snippets", hex => {
         let path = own_file(hex);
         if (!hex.exists(path)) {
             hex.write(path, "// Your own snippets, the same shape as the ones Snippets comes with (its snippets.hor), and over them.\nlet snippets = {\n    \"*\": {\n    }\n};\n");
@@ -35,12 +35,8 @@ func on_start(hex) {
 
 // Tab, the next place of a snippet that's going, or a snippet written out of the word before the caret
 func on_tab(hex, file) {
-    if (hex.selection == null || hex.lines == null) {
-        return false;
-    }
-    if (session != null && session.file == file && next_place(hex)) {
-        return true;
-    }
+    if (hex.selection == null || hex.lines == null) return false;
+    if (session != null && session.file == file && next_place(hex)) return true;
     session = null;
     return expand_at_caret(hex, file);
 }
@@ -48,11 +44,11 @@ func on_tab(hex, file) {
 /* What the snippets are */
 
 func ending_of(file) {
-    if (file == null) { return ""; }
+    if (file == null) return "";
     let dot = -1;
-    for (i in range(len(file))) {
-        if (file[i] == ".") { dot = i; }
-        if (file[i] == "/" || file[i] == "\\") { dot = -1; }
+    for (i, c in file) {
+        if (c == ".") dot = i;
+        if (c == "/" || c == "\\") dot = -1;
     }
     return dot < 0 ? "" : file.substring(dot).lower();
 }
@@ -82,9 +78,6 @@ func snippets_for(hex, file) {
 }
 
 /* Writing one out */
-
-func is_word(c) { return (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || (c >= "0" && c <= "9") || c == "_"; }
-func is_digit(c) { return c >= "0" && c <= "9"; }
 
 // @doc A snippet's body as the text it's written out as, and its places in the order Tab goes to them, $0 last
 func parse_body(body, unit) {
@@ -118,15 +111,15 @@ func parse_body(body, unit) {
         placeholder = "";
         if (body[i + 1] == "{") {
             i += 2;
-            while (i < len(body) && is_digit(body[i])) { digits += body[i]; i += 1; }
+            while (i < len(body) && body[i].is_digit()) { digits += body[i]; i += 1; }
             if (i < len(body) && body[i] == ":") {
                 i += 1;
                 while (i < len(body) && body[i] != "}") { placeholder += body[i]; i += 1; }
             }
             i += 1;
-        } else if (is_digit(body[i + 1])) {
+        } else if (body[i + 1].is_digit()) {
             i += 1;
-            while (i < len(body) && is_digit(body[i])) { digits += body[i]; i += 1; }
+            while (i < len(body) && body[i].is_digit()) { digits += body[i]; i += 1; }
         } else {
             text += c;
             i += 1;
@@ -134,14 +127,14 @@ func parse_body(body, unit) {
         }
 
         // The same place twice (${1:i} in a for) is written out both times, Tab goes to the first of them
-        key = "n" + digits;
+        key = `n{digits}`;
         if (seen[key] == null) {
             seen[key] = true;
             places.push({ index: digits == "0" ? 1000000 : number(digits), offset: len(text), length: len(placeholder) });
         }
         text += placeholder;
     }
-    places.sort(func(place) { return place.index; });
+    places.sort(place => place.index);
     return { text: text, places: places };
 }
 
@@ -150,8 +143,8 @@ func place_of(text, offset, line, column, margin) {
     let before = text.substring(0, offset);
     let breaks = 0;
     let last = -1;
-    for (i in range(len(before))) {
-        if (before[i] == "\n") {
+    for (i, c in before) {
+        if (c == "\n") {
             breaks += 1;
             last = i;
         }
@@ -168,22 +161,18 @@ func unit_of(hex) {
 func write_out(hex, file, snippet, line, from_column, to_column) {
     let text = hex.lines(line, line)[0];
     let indent = 0;
-    while (indent < len(text) && (text[indent] == " " || text[indent] == "\t")) {
-        indent += 1;
-    }
+    while (indent < len(text) && text[indent] in [" ", "\t"]) indent += 1;
     let margin = text.substring(0, indent);
 
     let made = parse_body(snippet.body, unit_of(hex));
     let written = made.text.replace("\n", "\n" + margin);
     hex.replace_text({ line: line, column: from_column }, { line: line, column: to_column }, written, len(written));
 
-    let places = made.places.map(func(place) {
+    let places = made.places.map(place => {
         let at = place_of(made.text, place.offset, line, from_column, margin);
         return { line: at.line, column: at.column, length: place.length };
     });
-    if (len(places) == 0) {
-        return;
-    }
+    if (len(places) == 0) return;
     show(hex, places[0]);
     session = len(places) > 1 ? { file: file, places: places, at: 0 } : null;
 }
@@ -195,22 +184,14 @@ func show(hex, place) {
 // The word before the caret written out if it's a snippet of the file, true when it was
 func expand_at_caret(hex, file) {
     let s = hex.selection();
-    if (s == null || s.text != "") {
-        return false;
-    }
+    if (s == null || s.text != "") return false;
     let line = hex.lines(s.caret.line, s.caret.line)[0];
     let end = s.caret.column - 1;
     let start = end;
-    while (start > 0 && is_word(line[start - 1])) {
-        start -= 1;
-    }
-    if (start == end) {
-        return false;
-    }
+    while (start > 0 && line[start - 1].is_word()) start -= 1;
+    if (start == end) return false;
     let snippet = snippets_for(hex, file)[line.substring(start, end)];
-    if (snippet == null) {
-        return false;
-    }
+    if (snippet == null) return false;
     write_out(hex, file, snippet, s.caret.line, start + 1, end + 1);
     return true;
 }
@@ -220,23 +201,17 @@ func expand_at_caret(hex, file) {
 func next_place(hex) {
     let s = hex.selection();
     let place = session.places[session.at];
-    if (s == null || s.caret.line != place.line) {
-        return false;
-    }
+    if (s == null || s.caret.line != place.line) return false;
 
     // What was typed in the place moves the places after it on the same line along by as much
     let moved = s.caret.column - (place.column + place.length);
     for (i in range(session.at + 1, len(session.places))) {
-        if (session.places[i].line == place.line) {
-            session.places[i].column += moved;
-        }
+        if (session.places[i].line == place.line) session.places[i].column += moved;
     }
 
     session.at += 1;
     show(hex, session.places[session.at]);
-    if (session.at >= len(session.places) - 1) {
-        session = null;
-    }
+    if (session.at >= len(session.places) - 1) session = null;
     return true;
 }
 
@@ -249,9 +224,8 @@ func pick(hex) {
     let file = hex.file();
     let found = snippets_for(hex, file);
     let items = [];
-    for (trigger in found) {
-        let snippet = found[trigger];
-        items.push({ label: trigger + (snippet.about != "" && snippet.about != null ? "  " + snippet.about : ""), on_pressed: func(hex) {
+    for (trigger, snippet in found) {
+        items.push({ label: trigger + (snippet.about != "" && snippet.about != null ? "  " + snippet.about : ""), on_pressed: hex => {
             let s = hex.selection();
             write_out(hex, file, snippet, s.from.line, s.from.column, s.from.line == s.to.line ? s.to.column : s.from.column);
         } });

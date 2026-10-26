@@ -29,7 +29,7 @@ let FIGHTER_UNITS = 73;
 func drawn(state) { return state.move == null ? null : state.boxes[state.move]; }
 
 func frame_on_screen(state) {
-    if (len(state.laid.frames) == 0) { return null; }
+    if (len(state.laid.frames) == 0) return null;
     return state.laid.frames[math.clamp(state.frame, 0, len(state.laid.frames) - 1)];
 }
 
@@ -38,7 +38,7 @@ func draw(state) {
     let canvas = state.ui.get("canvas");
     canvas.clear();
     let at = frame_on_screen(state);
-    if (state.move == null || at == null) { return; }
+    if (state.move == null || at == null) return;
 
     let size = boxes_of.frame_size(state.art);
     let half = vec(size.x / 2, size.y / 2);
@@ -47,9 +47,9 @@ func draw(state) {
     draw_art(state, canvas, at, half);
 
     let traced = tracer.trace(state.art, state.traces, at.animation, at.shown);
-    if (traced != null) { draw_traced(state, canvas, traced, at); }
+    if (traced != null) draw_traced(state, canvas, traced, at);
     draw_red_box(state, canvas);
-    if (traced != null && state.overlays.show_path) { draw_launch(state, canvas, traced); }
+    if (traced != null && state.overlays.show_path) draw_launch(state, canvas, traced);
 }
 
 func draw_frame_lines(canvas, half) {
@@ -60,7 +60,7 @@ func draw_frame_lines(canvas, half) {
 // The ground, a line where the feet are and the dark under it, far enough either way that no pan finds its end
 func draw_floor(state, canvas) {
     let floor = floor_of(state);
-    if (floor == null) { return; }
+    if (floor == null) return;
     canvas.rect(vec(-8000, floor - 8000), vec(8000, floor), UNDER_FLOOR);
     canvas.line(vec(-8000, floor), vec(8000, floor), 1, FLOOR);
 }
@@ -69,15 +69,15 @@ func draw_floor(state, canvas) {
 // Where the fighter's feet are, in pixels of the frame from its middle. The bottom of what's drawn on the first frame of
 // the idle, or of the frame on screen when there's no idle, kept until the fighter or the art changes
 func floor_of(state) {
-    if (state.floor != null) { return state.floor; }
-    if (state.art == null) { return null; }
+    if (state.floor != null) return state.floor;
+    if (state.art == null) return null;
 
     let traced = state.art.has("idle") ? tracer.trace(state.art, state.traces, "idle", 0) : null;
     if (traced == null) {
         let at = frame_on_screen(state);
         traced = at == null ? null : tracer.trace(state.art, state.traces, at.animation, at.shown);
     }
-    if (traced == null) { return null; }
+    if (traced == null) return null;
     state.floor = boxes_of.to_pixels(state.art, traced.hurt).min.y;
     return state.floor;
 }
@@ -98,28 +98,28 @@ func fit(state) {
 }
 
 func drawn_around(state) {
-    if (state.art == null || len(state.laid.frames) == 0) { return null; }
+    if (state.art == null || len(state.laid.frames) == 0) return null;
     let around = null;
     let seen = {};
     for (frame in state.laid.frames) {
         let key = `{frame.animation}:{frame.shown}`;
-        if (!has(seen, key)) {
+        if (!(key in seen)) {
             seen[key] = true;
             let traced = tracer.trace(state.art, state.traces, frame.animation, frame.shown);
-            if (traced != null) { around = grown(around, boxes_of.to_pixels(state.art, traced.hurt)); }
+            if (traced != null) around = grown(around, boxes_of.to_pixels(state.art, traced.hurt));
         }
     }
 
     let idle = state.art.has("idle") ? tracer.trace(state.art, state.traces, "idle", 0) : null;
-    if (idle != null) { around = grown(around, boxes_of.to_pixels(state.art, idle.hurt)); }
-    for (box in drawn(state) ?? []) { around = grown(around, boxes_of.to_pixels(state.art, box)); }
+    if (idle != null) around = grown(around, boxes_of.to_pixels(state.art, idle.hurt));
+    for (box in drawn(state) ?? []) around = grown(around, boxes_of.to_pixels(state.art, box));
     let floor = floor_of(state);
-    if (around != null && floor != null) { around = grown(around, { min: vec(around.min.x, floor), max: vec(around.max.x, floor) }); }
+    if (around != null && floor != null) around = grown(around, { min: vec(around.min.x, floor), max: vec(around.max.x, floor) });
     return around;
 }
 
 func grown(around, box) {
-    if (around == null) { return { min: box.min, max: box.max }; }
+    if (around == null) return { min: box.min, max: box.max };
     return {
         min: vec(math.min(around.min.x, box.min.x), math.min(around.min.y, box.min.y)),
         max: vec(math.max(around.max.x, box.max.x), math.max(around.max.y, box.max.y))
@@ -128,7 +128,7 @@ func grown(around, box) {
 
 // The art, and the frames either side faintly when asked, for seeing a limb come and go
 func draw_art(state, canvas, at, half) {
-    if (state.art == null) { return; }
+    if (state.art == null) return;
 
     if (state.overlays.show_onion) {
         for (step in [-1, 1]) {
@@ -158,13 +158,13 @@ func draw_traced(state, canvas, traced, at) {
 
 func draw_red_box(state, canvas) {
     let box = drawn(state);
-    if (box == null) { return; }
+    if (box == null) return;
 
     let pixels = boxes_of.to_pixels(state.art, box[timing.shown_index(state.laid, state.frame, len(box))]);
     let solid = timing.active_index(state.laid, state.frame) >= 0;
     canvas.rect(pixels.min, pixels.max, vec(DRAWN.x, DRAWN.y, DRAWN.z, solid ? 0.3 : 0.08));
     canvas.frame(pixels.min, pixels.max, solid ? 2 : 1, vec(DRAWN.x, DRAWN.y, DRAWN.z, solid ? 1 : 0.4));
-    if (!solid) { return; }
+    if (!solid) return;
 
     let grip = 3 / math.max(0.01, canvas.zoom);
     for (corner in [pixels.min, pixels.max, vec(pixels.min.x, pixels.max.y), vec(pixels.max.x, pixels.min.y)]) {
@@ -176,9 +176,9 @@ func draw_red_box(state, canvas) {
 // on the art by the fighter's height. On the hit frame only, it's what happens there. The same flight as the combo
 // window's, with where they are when the attacker is free marked
 func draw_launch(state, canvas, traced) {
-    if (state.frame != state.laid.hit) { return; }
+    if (state.frame != state.laid.hit) return;
     let combo = combo_view.window(state);
-    if (combo == null || len(combo.flown.points) < 2) { return; }
+    if (combo == null || len(combo.flown.points) < 2) return;
 
     let hurt = boxes_of.to_pixels(state.art, traced.hurt);
     let hit = boxes_of.to_pixels(state.art, traced.hit);
@@ -195,7 +195,7 @@ func draw_launch(state, canvas, traced) {
     let at = vec(from.x + free.x * scale, from.y + free.y * scale);
     canvas.rect(vec(at.x - 2, at.y - 2), vec(at.x + 2, at.y + 2), FREE);
 
-    let last = points[len(points) - 1];
+    let last = points[-1];
     let top = rules.flight_top(combo.flown);
     let said = combo.flown.launched ? `up {rules.units(top.y)}, {rules.units(top.x)} along at the top` : `{rules.units(last.x)} along`;
     canvas.text(said, vec(from.x + last.x * scale + 4, from.y + 4), 0.1, PATH);
@@ -204,13 +204,13 @@ func draw_launch(state, canvas, traced) {
 /* The pointer, drawing, moving and sizing the red box. A drag is one step to undo, recorded as it's let go of */
 
 func pointer(state, e) {
-    if (state.move == null || state.laid.hit < 0) { return; }
+    if (state.move == null || state.laid.hit < 0) return;
     if (e.kind == "down") {
         start_drag(state, e);
     } else if (e.kind == "drag" && state.drag != null) {
         drag_to(state, e.at);
     } else if (e.kind == "up" && state.drag != null) {
-        if (state.drag.moved) { edits.record(state, { kind: "boxes", boxes: state.drag.before }); }
+        if (state.drag.moved) edits.record(state, { kind: "boxes", boxes: state.drag.before });
         state.drag = null;
         state.refresh();
     }
@@ -255,7 +255,7 @@ func corner_at(pixels, at, grab) {
         for (cy in [0, 1]) {
             let x = cx == 0 ? pixels.min.x : pixels.max.x;
             let y = cy == 0 ? pixels.min.y : pixels.max.y;
-            if (math.abs(at.x - x) <= grab && math.abs(at.y - y) <= grab) { return vec(cx, cy); }
+            if (math.abs(at.x - x) <= grab && math.abs(at.y - y) <= grab) return vec(cx, cy);
         }
     }
     return null;

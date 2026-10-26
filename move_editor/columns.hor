@@ -21,8 +21,8 @@ let LEFT_REST = 16 + 26 * 3 + 6 * 4 + 8;
 func widths(wanted_right, width) {
     let left = width < 1000 ? 180 : 230;
     let right = math.min(wanted_right, math.max(LEAST_RIGHT, width - left - LEAST_MIDDLE - 20));
-    if (width < left + LEAST_MIDDLE + right + 20) { left = 0; }
-    if (width < LEAST_MIDDLE + right + 10) { right = 0; }
+    if (width < left + LEAST_MIDDLE + right + 20) left = 0;
+    if (width < LEAST_MIDDLE + right + 10) right = 0;
     let gaps = (left > 0 ? 10 : 0) + (right > 0 ? 10 : 0);
     return { left: left, right: right, middle: math.max(160, width - left - right - gaps) };
 }
@@ -42,8 +42,8 @@ func lay_out(state, room) {
     ui.get("left").visible = sized.left > 0;
     ui.get("right").visible = sized.right > 0;
     size_middle(ui, sized.middle, height);
-    if (sized.right > 0) { size_right(ui, sized.right, height); }
-    if (sized.left > 0) { size_left(ui, sized.left, height); }
+    if (sized.right > 0) size_right(ui, sized.right, height);
+    if (sized.left > 0) size_left(ui, sized.left, height);
 }
 
 // What the middle has other than the canvas, the header and the toolbar over it, the line under it, the timeline, the
@@ -61,9 +61,9 @@ func size_middle(ui, width, height) {
     // The overlays say what they are while there's room for it, the icons do after
     let narrow = width < 500;
     let words = { show_hurtbox: "hurtbox", show_traced: "traced", show_onion: "onion", show_path: "launch" };
-    for (button in keys(words)) {
+    for (button, word in words) {
         ui.get(button).size = vec(narrow ? 30 : 84, 24);
-        ui.get(button).label = narrow ? "" : words[button];
+        ui.get(button).label = narrow ? "" : word;
     }
 }
 
@@ -74,7 +74,7 @@ func size_right(ui, width, height) {
     for (page in ["move_scroll", "phase_scroll", "box_scroll", "data_scroll", "inputs_scroll"]) {
         ui.get(page).size = vec(width, math.max(80, height - TABS_HEADER));
     }
-    for (form in ["move_form", "reroute_form", "phase_form", "box_form"]) { ui.get(form).row_width = inside; }
+    for (form in ["move_form", "reroute_form", "phase_form", "box_form"]) ui.get(form).row_width = inside;
     for (label in ["move_head", "upgrade_info", "phase_head", "box_title", "box_info", "data_text", "combo_text", "table_text", "inputs_text"]) {
         ui.get(label).size = vec(inside, 0);
     }
@@ -89,9 +89,9 @@ func size_left(ui, width, height) {
     let narrow = width < 220;
     let each = (width - 6) / 4;
     let words = { new_move: "New", duplicate_move: "Copy", rename_move: "Name", delete_move: "" };
-    for (button in keys(words)) {
+    for (button, word in words) {
         ui.get(button).size = vec(each, 26);
-        ui.get(button).label = narrow ? "" : words[button];
+        ui.get(button).label = narrow ? "" : word;
     }
 
     // Everything else of the column is the list, it's what's picked from every few seconds. It used to share the column

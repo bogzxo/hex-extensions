@@ -92,14 +92,14 @@ let PHASE_FIELDS = [
 // @doc Every key a move can have, the ones the forms don't show among them
 func move_keys() {
     let all = [];
-    for (field in MOVE_FIELDS) { all.push(field.key); }
-    for (last in ["stance_reroutes", "finish_reroutes", "phases"]) { all.push(last); }
+    for (field in MOVE_FIELDS) all.push(field.key);
+    for (last in ["stance_reroutes", "finish_reroutes", "phases"]) all.push(last);
     return all;
 }
 
 func phase_keys() {
     let all = [];
-    for (field in PHASE_FIELDS) { all.push(field.key); }
+    for (field in PHASE_FIELDS) all.push(field.key);
     return all;
 }
 
@@ -145,11 +145,11 @@ func reroute_fields(ids) {
 // @doc
 // What hit_cancel says as a list of ids, or ["any"]. The file has a list or "any", the form's flags have "jump | any"
 func hit_cancels(value) {
-    if (value == null) { return []; }
-    if (typeof(value) == "list") { return value; }
+    if (value == null) return [];
+    if (typeof(value) == "list") return value;
     let made = [];
     for (part in text(value).split("|")) {
-        if (part.trim() != "") { made.push(part.trim()); }
+        if (part.trim() != "") made.push(part.trim());
     }
     return made;
 }
@@ -157,7 +157,7 @@ func hit_cancels(value) {
 // @doc What the form's flags of hit_cancel come to in the file, "any" on its own or a list of the ids, null for none
 func hit_cancel_value(said) {
     let ids = hit_cancels(said);
-    if (ids.index_of("any") >= 0) { return "any"; }
+    if ("any" in ids) return "any";
     return len(ids) == 0 ? null : ids;
 }
 

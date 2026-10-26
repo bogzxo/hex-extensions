@@ -7,7 +7,7 @@ let NAMES = ["jab", "heavy", "launcher", "sweep", "overhead", "aerial", "special
 
 func phase(animation, frames, hit) {
     let made = { animation: animation, frames: frames };
-    if (hit != null) { made.hit = hit; }
+    if (hit != null) made.hit = hit;
     return made;
 }
 

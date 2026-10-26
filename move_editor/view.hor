@@ -58,18 +58,18 @@ func make(hex, ui, file) {
         sized: vec(0, 0), fit: 2, right: hex.setting("right_width") ?? 300, reroutes_for: ""
     };
 
-    state.say = func(said) { ui.get("status").text = said; };
-    state.warn = func(said) {
+    state.say = said => { ui.get("status").text = said; };
+    state.warn = said => {
         ui.get("status").text = said;
         hex.notify(said);
     };
-    state.fit_soon = func() { fit_soon(state); };
-    state.wake = func() { wake(state); };
-    state.reload = func() { reload(state); };
-    state.refresh = func() { refresh(state); };
-    state.relayout = func() { relayout(state); };
-    state.pick_fighter = func(name) { pick_fighter(state, name); };
-    state.save_boxes = func() { save_boxes(state); };
+    state.fit_soon = () => { fit_soon(state); };
+    state.wake = () => { wake(state); };
+    state.reload = () => { reload(state); };
+    state.refresh = () => { refresh(state); };
+    state.relayout = () => { relayout(state); };
+    state.pick_fighter = name => { pick_fighter(state, name); };
+    state.save_boxes = () => { save_boxes(state); };
     return state;
 }
 
@@ -84,7 +84,7 @@ func load_game(state) {
         return;
     }
 
-    if (hex.setting("last_game") != state.root) { hex.set_setting("last_game", state.root); }
+    if (hex.setting("last_game") != state.root) hex.set_setting("last_game", state.root);
 
     // The game's combat rules, which everything worked out of a move goes by
     state.rules = rules.load(hex, state.root);
@@ -95,7 +95,7 @@ func load_game(state) {
     state.fighters = game.fighters_of(hex, state.root, state.file);
 
     let names = [];
-    for (fighter in state.fighters) { names.push(fighter.name); }
+    for (fighter in state.fighters) names.push(fighter.name);
     let picker = state.ui.get("fighter");
     picker.options = len(names) > 0 ? names : ["none"];
     if (len(names) > 0) {
@@ -107,9 +107,9 @@ func load_game(state) {
 func pick_fighter(state, name) {
     let chosen = null;
     for (fighter in state.fighters) {
-        if (fighter.name == name) { chosen = fighter; }
+        if (fighter.name == name) chosen = fighter;
     }
-    if (chosen == null) { return; }
+    if (chosen == null) return;
 
     let hex = state.hex;
     state.fighter = chosen;
@@ -117,7 +117,7 @@ func pick_fighter(state, name) {
     state.traces = {};
     state.floor = null;
     state.art = hex.exists(chosen.sprites) ? hex.sprite(chosen.sprites) : null;
-    if (state.art != null) { hex.watch(chosen.sprites); }
+    if (state.art != null) hex.watch(chosen.sprites);
     fit_soon(state);
     read_boxes(state);
 
@@ -133,13 +133,13 @@ func pick_fighter(state, name) {
 
 // @doc The fighter's moves read again out of its files, as they are in Hex, and everything after them
 func reload(state) {
-    if (state.fighter == null) { return; }
+    if (state.fighter == null) return;
     let merged = game.load_moves(state.hex, state.fighter.files);
-    for (file in merged.errors) { state.say(`{game.file_name(file)} doesn't run as it is, {merged.errors[file]}`); }
+    for (file, error in merged.errors) state.say(`{game.file_name(file)} doesn't run as it is, {error}`);
 
     state.moves = merged.moves;
     state.ids_all = merged.ids;
-    if (state.move != null && !has(state.moves, state.move)) { state.move = null; }
+    if (state.move != null && !(state.move in state.moves)) state.move = null;
 
     // The reroutes offer every move of the fighter, made again when there are other moves
     let ids_key = merged.ids.join(",");
@@ -158,12 +158,11 @@ func reload(state) {
 // What's wrong with every file of the fighter, into Hex's problems
 func report(state, merged) {
     let files = state.fighter.files;
-    for (i in range(len(files))) {
-        let file = files[i];
-        if (has(merged.by_file, file)) {
+    for (i, file in files) {
+        if (file in merged.by_file) {
             let found = checks.check_file(file, merged.by_file[file], merged, state.art, state.boxes, state.fighter.name, frame_rate(state));
             if (i == len(files) - 1) {
-                for (more in checks.check_fighter(merged)) { found.push(more); }
+                for (more in checks.check_fighter(merged)) found.push(more);
             }
             state.hex.problems(file, found);
         }
@@ -180,7 +179,7 @@ func relayout(state) {
     let box = state.boxes[state.move];
     state.laid = timing.lay_out(state.art, state.moves[state.move].move, frame_rate(state), box == null ? 0 : len(box));
     state.frame = math.clamp(state.frame, 0, math.max(0, len(state.laid.frames) - 1));
-    if (state.phase == null || timing.first_of(state.laid, state.phase) < 0) { state.phase = timing.phase_at(state.laid, state.frame); }
+    if (state.phase == null || timing.first_of(state.laid, state.phase) < 0) state.phase = timing.phase_at(state.laid, state.frame);
     state.boxes_changed = boxes_of.file_text(state.fighter.id, state.boxes) != state.boxes_saved;
     frame_view.draw(state);
     timeline_view.draw(state);
@@ -214,7 +213,7 @@ func save_boxes(state) {
     }
 
     let written = boxes_of.file_text(state.fighter.id, state.boxes);
-    if (written == state.boxes_saved && state.hex.exists(file)) { return; }
+    if (written == state.boxes_saved && state.hex.exists(file)) return;
     state.hex.write(file, written);
     state.boxes_saved = written;
     state.boxes_changed = false;
@@ -249,12 +248,12 @@ func wake(state) { state.ui.on_tick = state.ticker; }
 func tick(state, dt) {
     if (state.fit > 0) {
         state.fit = state.fit - 1;
-        if (state.fit == 0) { frame_view.fit(state); }
+        if (state.fit == 0) frame_view.fit(state);
     }
 
-    if (state.playing && len(state.laid.frames) > 0) { play(state, dt); }
-    if (len(keys(state.lit)) > 0 && timeline_view.fade(state, dt)) { timeline_view.draw(state); }
-    if (state.fit == 0 && !state.playing && len(keys(state.lit)) == 0) { state.ui.on_tick = null; }
+    if (state.playing && len(state.laid.frames) > 0) play(state, dt);
+    if (len(keys(state.lit)) > 0 && timeline_view.fade(state, dt)) timeline_view.draw(state);
+    if (state.fit == 0 && !state.playing && len(keys(state.lit)) == 0) state.ui.on_tick = null;
 }
 
 func play(state, dt) {
@@ -283,7 +282,7 @@ func resize_right(state, width) {
 /* The frame on screen */
 
 func show_frame(state, index) {
-    if (len(state.laid.frames) == 0) { return; }
+    if (len(state.laid.frames) == 0) return;
     state.frame = math.clamp(index, 0, len(state.laid.frames) - 1);
     state.phase = timing.phase_at(state.laid, state.frame);
     refresh(state);
@@ -309,7 +308,7 @@ func key_pressed(state, key) {
     if (key == "up") { moves_list.pick(state, math.max(state.ids.index_of(state.move) - 1, 0)); return true; }
     if (key == "undo") { edits.undo(state); return true; }
     if (key == "redo") { edits.redo(state); return true; }
-    if (key == "delete" && state.move != null && has(state.boxes, state.move)) {
+    if (key == "delete" && state.move != null && state.move in state.boxes) {
         edits.change_boxes(state, state.move, null);
         refresh(state);
         return true;
@@ -318,4 +317,4 @@ func key_pressed(state, key) {
 }
 
 // @doc Fight!, the red boxes saved first
-func fight(state) { fight_of.fight(state, func() { save_boxes(state); }); }
+func fight(state) { fight_of.fight(state, () => { save_boxes(state); }); }

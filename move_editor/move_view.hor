@@ -9,7 +9,7 @@ let root = compositor.stack({
     pivot: "top_left",
     padding: vec(10, 8, 10, 8),
     spacing: 10,
-    direction: "horizontal"
+    direction: "horizontal",
 });
 
 /* The left column, the moves and what's done to them, the list as tall as the column lets it be */

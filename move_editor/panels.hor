@@ -46,7 +46,7 @@ func show_move(state) {
     let at = state.moves[state.move];
     let values = {};
     for (field in schema.MOVE_FIELDS) {
-        if (has(at.move, field.key)) { values[field.key] = at.move[field.key]; }
+        if (field.key in at.move) values[field.key] = at.move[field.key];
     }
     ui.get("move_form").values = values;
     ui.get("reroute_form").values = reroute_values(at.move);
@@ -60,7 +60,7 @@ func show_move(state) {
 func reroute_values(move) {
     let values = {};
     for (kind in ["stance_reroutes", "finish_reroutes"]) {
-        for (stance in move[kind] ?? {}) { values[`{kind}.{stance}`] = move[kind][stance]; }
+        for (stance, target in move[kind] ?? {}) values[`{kind}.{stance}`] = target;
     }
     return values;
 }
@@ -78,7 +78,7 @@ func show_phase(state) {
 
     let values = {};
     for (field in schema.PHASE_FIELDS) {
-        if (has(written, field.key)) { values[field.key] = written[field.key]; }
+        if (field.key in written) values[field.key] = written[field.key];
     }
     ui.get("phase_form").values = values;
     ui.get("phase_name").text = state.phase;
@@ -117,8 +117,8 @@ func show_box(state) {
 // @doc A number of the red box typed in, the boxes of the move as they come out of it, null for nothing to change
 func box_from_form(state, key, value) {
     let box = state.boxes[state.move];
-    if (box == null) { return null; }
-    if (key == "active") { return boxes_of.resized(box, math.max(1, value)); }
+    if (box == null) return null;
+    if (key == "active") return boxes_of.resized(box, math.max(1, value));
 
     let index = timing.box_index(state.laid, state.frame, len(box));
     if (index < 0) {
@@ -158,7 +158,7 @@ func show_data(state) {
     }
 
     let move = state.moves[state.move].move;
-    if (state.rules == null) { return; }
+    if (state.rules == null) return;
     let data = rules.frame_data(state.rules, state.laid, move);
     let victim = state.victim ?? state.fighter;
     ui.get("data_text").text = data == null ? `**{state.move}** doesn't hit anybody, there's no frame data to it.` : describe(state.rules, move, data, victim == null || victim.movement == null ? state.rules.movement : victim.movement);
@@ -184,13 +184,13 @@ func describe(n, move, data, victim) {
         `It builds {worth.meter_on_hit} meter on hit and gives whoever takes it {worth.meter_taken}, {worth.meter_on_block} on a block and {worth.meter_on_whiff} on a whiff.`,
         kind_line(move, worth)
     ];
-    if (worth.whiff_lag > 0) { lines.push(`Whiffed, it holds its last frame {worth.whiff_lag} longer and its cancel frames don't count.`); }
+    if (worth.whiff_lag > 0) lines.push(`Whiffed, it holds its last frame {worth.whiff_lag} longer and its cancel frames don't count.`);
     let growth = growth_line(n, move, victim);
-    if (growth != "") { lines.push(growth); }
+    if (growth != "") lines.push(growth);
     if (worth.launches) {
         lines.push(`Juggled, they fall on {math.round(worth.juggle[0], 2)} of their gravity, then {math.round(worth.juggle[1], 2)}, {math.round(worth.juggle[2], 2)} and {math.round(worth.juggle[3], 2)} by the fifth air hit, which is what drops a long juggle.`);
     }
-    if (worth.knockdown > 0) { lines.push(`It knocks them down, {worth.knockdown} on the floor before they get up.`); }
+    if (worth.knockdown > 0) lines.push(`It knocks them down, {worth.knockdown} on the floor before they get up.`);
     lines.push("");
     lines.push("Game frames, 60 a second.");
     return lines.join("\n");
@@ -209,7 +209,7 @@ func kind_line(move, worth) {
 
 // Where launch_growth has the launch go as the health goes, "" for a move without any
 func growth_line(n, move, victim) {
-    if (move.launch_growth == null || (move.launch_growth.x == 0 && move.launch_growth.y == 0) || !rules.launches(move)) { return ""; }
+    if (move.launch_growth == null || (move.launch_growth.x == 0 && move.launch_growth.y == 0) || !rules.launches(move)) return "";
     let at = [];
     for (lost in [30, 60, 90]) {
         let launch = rules.launch_at(n, move, victim, lost);
@@ -224,14 +224,14 @@ func table(state) {
     let rows = [];
     for (id in state.ids_all) {
         let data = data_of(state, id);
-        if (data != null) { rows.push({ id: id, data: data, damage: state.moves[id].move.damage ?? 0 }); }
+        if (data != null) rows.push({ id: id, data: data, damage: state.moves[id].move.damage ?? 0 });
     }
 
     let by = state.ui.get("sort_by").value;
-    if (by == "by startup") { rows.sort(func(row) { return row.data.startup; }); }
-    if (by == "by on hit") { rows.sort(func(row) { return -row.data.on_hit; }); }
-    if (by == "by on block") { rows.sort(func(row) { return -row.data.on_block; }); }
-    if (by == "by damage") { rows.sort(func(row) { return -row.damage; }); }
+    if (by == "by startup") rows.sort(row => row.data.startup);
+    if (by == "by on hit") rows.sort(row => -row.data.on_hit);
+    if (by == "by on block") rows.sort(row => -row.data.on_block);
+    if (by == "by damage") rows.sort(row => -row.damage);
 
     let lines = ["```", "move               start act  rec  hit  block dmg"];
     for (row in rows) {

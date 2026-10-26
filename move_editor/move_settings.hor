@@ -5,7 +5,7 @@
 let settings = compositor.stack({
     anchor: "left",
     pivot: "left",
-    spacing: 8
+    spacing: 8,
 });
 
 let game_row = compositor.stack({ parent: settings, anchor: "left", pivot: "left", spacing: 10, direction: "horizontal" });
@@ -15,7 +15,7 @@ let game_name = compositor.label({
     text: "Fighter2D's exe",
     text_scale: 0.13,
     align: "left",
-    tooltip: "The game Fight! starts, or the folder it's in. Absolute, or from the game's folder (the one with Assets/data/characters.hor in it). Left empty it's looked for in the game's bin folder, the newest build there. Look picks it with Windows' dialog"
+    tooltip: "The game Fight! starts, or the folder it's in. Absolute, or from the game's folder (the one with Assets/data/characters.hor in it). Left empty it's looked for in the game's bin folder, the newest build there. Look picks it with Windows' dialog",
 });
 let game_path = compositor.textbox({
     parent: game_row,
@@ -23,7 +23,7 @@ let game_path = compositor.textbox({
     text_scale: 0.13,
     placeholder: "bin/x64/Debug/net10.0/Fighter2D.exe",
     button: "Look",
-    button_width: 56
+    button_width: 56,
 });
 
 let found = compositor.label({
@@ -33,7 +33,7 @@ let found = compositor.label({
     text_scale: 0.12,
     color: vec(0.58, 0.6, 0.66, 1),
     wrap: true,
-    align: "top_left"
+    align: "top_left",
 });
 
 let map_row = compositor.stack({ parent: settings, anchor: "left", pivot: "left", spacing: 10, direction: "horizontal" });
@@ -55,5 +55,5 @@ let note = compositor.label({
     text_scale: 0.12,
     color: vec(0.58, 0.6, 0.66, 1),
     wrap: true,
-    align: "top_left"
+    align: "top_left",
 });

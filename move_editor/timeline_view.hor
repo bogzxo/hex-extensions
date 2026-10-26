@@ -61,9 +61,9 @@ func text_width(text, scale) { return len(text) * scale * 58; }
 // the meter covers, the longer of the two. data is null for a move that doesn't hit, which has only your row
 func meter(state) {
     let total = len(state.laid.frames);
-    if (state.move == null || total == 0 || state.rules == null) { return null; }
+    if (state.move == null || total == 0 || state.rules == null) return null;
     let data = rules.frame_data(state.rules, state.laid, state.moves[state.move].move);
-    if (data == null) { return { total: total, hit: -1, last: -1, stun: 0, them_free: total, span: total, data: null }; }
+    if (data == null) return { total: total, hit: -1, last: -1, stun: 0, them_free: total, span: total, data: null };
 
     let last = state.laid.hit + data.active - 1;
     let stun = state.meter_on == "hit" ? data.hitstun : data.blockstun;
@@ -74,7 +74,7 @@ func meter(state) {
 // @doc Where the cells go, { left, cell, count, span }, null for a move with no frames. count is the move's frames, span the meter's
 func geometry(state, meter) {
     let count = len(state.laid.frames);
-    if (count == 0) { return null; }
+    if (count == 0) return null;
     let span = meter == null ? count : meter.span;
     let width = state.ui.get("timeline").view_size.x;
     let cell = math.min(22, math.max(2, (width - GUTTER - AFTER) / span));
@@ -91,13 +91,13 @@ func draw(state) {
 
     // The test and a drag ask where the cells were, they aren't centred any more and the meter decides how wide they are
     state.timeline_at = at;
-    if (at == null) { return; }
+    if (at == null) return;
 
     let numbers = numbers_of(state, measured);
     note_changes(state, numbers);
     draw_meter(state, timeline, at, measured, numbers);
     draw_cells(state, timeline, at);
-    for (phase in state.laid.phases) { draw_phase(state, timeline, at, phase); }
+    for (phase in state.laid.phases) draw_phase(state, timeline, at, phase);
 }
 
 /* The frame meter */
@@ -110,7 +110,7 @@ func numbers_of(state, measured) {
         numbers.startup = measured.total;
         return numbers;
     }
-    for (frame in state.laid.frames) { numbers[frame.kind] = numbers[frame.kind] + 1; }
+    for (frame in state.laid.frames) numbers[frame.kind] = numbers[frame.kind] + 1;
     numbers.stun = measured.stun;
     numbers.advantage = measured.them_free - measured.total;
     return numbers;
@@ -131,7 +131,7 @@ func note_changes(state, numbers) {
         let before = was.numbers[name];
         if (before != numbers[name] && before != null && numbers[name] != null) {
             // a number that changes twice in a row says what it was before either
-            let from = has(state.lit, name) ? state.lit[name].from : before;
+            let from = name in state.lit ? state.lit[name].from : before;
             state.lit[name] = { from: from, left: LIT_FOR };
             state.wake();
         }
@@ -157,7 +157,7 @@ func fade(state, dt) {
 // A number of the meter as it's written, with what it was while it's lit
 func said(state, name, value, signed) {
     let now = signed ? rules.signed(value) : `{value}`;
-    if (!has(state.lit, name)) { return now; }
+    if (!(name in state.lit)) return now;
     let from = state.lit[name].from;
     return `{signed ? rules.signed(from) : from} » {now}`;
 }
@@ -166,7 +166,7 @@ func draw_meter(state, timeline, at, measured, numbers) {
     let left = -timeline.view_size.x / 2;
     timeline.text("you", vec(left + 6, METER_YOU.top - 1), 0.09, GUTTER_TEXT);
     draw_runs(state, timeline, at, measured);
-    if (measured.data == null) { return; }
+    if (measured.data == null) return;
 
     timeline.text(state.meter_on == "hit" ? "on hit" : "on block", vec(left + 6, METER_THEM.top - 1), 0.09, GUTTER_TEXT);
     let gap = at.cell > 3 ? 1 : 0;
@@ -176,8 +176,8 @@ func draw_meter(state, timeline, at, measured, numbers) {
         timeline.rect(vec(cell_x(at, i), METER_THEM.bottom), vec(cell_x(at, i + 1) - gap, METER_THEM.top), vec(STUN.x, STUN.y, STUN.z, 0.2));
     }
     timeline.rect(vec(cell_x(at, measured.last), METER_THEM.bottom), vec(cell_x(at, measured.them_free) - gap, METER_THEM.top), STUN);
-    if (gap > 0) { ticks(timeline, at, measured.last, measured.them_free, METER_THEM); }
-    number_on(timeline, at, measured.last, measured.them_free, METER_THEM, said(state, "stun", measured.stun, false), has(state.lit, "stun"));
+    if (gap > 0) ticks(timeline, at, measured.last, measured.them_free, METER_THEM);
+    number_on(timeline, at, measured.last, measured.them_free, METER_THEM, said(state, "stun", measured.stun, false), "stun" in state.lit);
 
     // The frames one of you is free and the other isn't, yours green and theirs red, then the frame you both are
     let advantage = numbers.advantage;
@@ -189,7 +189,7 @@ func draw_meter(state, timeline, at, measured, numbers) {
     let both = cell_x(at, measured.span);
     timeline.line(vec(both, METER_THEM.bottom - 2), vec(both, METER_YOU.top + 2), 1, vec(1, 1, 1, 0.8));
 
-    let colour = has(state.lit, "advantage") ? LIT : advantage > 0 ? PLUS : advantage < 0 ? MINUS : EVEN;
+    let colour = "advantage" in state.lit ? LIT : advantage > 0 ? PLUS : advantage < 0 ? MINUS : EVEN;
     timeline.text(said(state, "advantage", advantage, true), vec(both + 5, METER_YOU.top - 4), 0.13, colour);
 }
 
@@ -202,9 +202,9 @@ func draw_runs(state, timeline, at, measured) {
         if (i == measured.total || state.laid.frames[i].kind != kind) {
             let colour = kind == "startup" ? STARTUP : kind == "active" ? HIT_CELL : kind == "recovery" ? RECOVERY : NEUTRAL;
             timeline.rect(vec(cell_x(at, from), METER_YOU.bottom), vec(cell_x(at, i) - gap, METER_YOU.top), colour);
-            if (gap > 0) { ticks(timeline, at, from, i, METER_YOU); }
+            if (gap > 0) ticks(timeline, at, from, i, METER_YOU);
             let name = kind == "neutral" ? "startup" : kind;
-            number_on(timeline, at, from, i, METER_YOU, said(state, name, i - from, false), has(state.lit, name));
+            number_on(timeline, at, from, i, METER_YOU, said(state, name, i - from, false), name in state.lit);
             from = i;
         }
     }
@@ -212,7 +212,7 @@ func draw_runs(state, timeline, at, measured) {
 
 // The cells of a run told apart, a dark line between every two, the way the game's meter has them
 func ticks(timeline, at, from, to, row) {
-    if (at.cell < 6) { return; }
+    if (at.cell < 6) return;
     for (i in range(from + 1, to)) {
         let x = cell_x(at, i) - 1;
         timeline.line(vec(x, row.bottom), vec(x, row.top), 1, vec(0, 0, 0, 0.25));
@@ -236,7 +236,7 @@ func number_on(timeline, at, from, to, row, text, lit) {
 
 // @doc A press on the meter's name for them, on hit and on block swapped, true when it was one
 func swap_meter(state, at, point) {
-    if (point.x >= at.left || point.y < METER_THEM.bottom || point.y > METER_THEM.top) { return false; }
+    if (point.x >= at.left || point.y < METER_THEM.bottom || point.y > METER_THEM.top) return false;
     state.meter_on = state.meter_on == "hit" ? "block" : "hit";
     draw(state);
     return true;
@@ -261,7 +261,7 @@ func draw_cells(state, timeline, at) {
                 numbered = x0;
             }
         }
-        if (i == state.frame) { timeline.frame(vec(x0 - 1, CELLS.bottom - 1), vec(x1 + 1, CELLS.top + 1), 2, vec(1, 1, 1, 1)); }
+        if (i == state.frame) timeline.frame(vec(x0 - 1, CELLS.bottom - 1), vec(x1 + 1, CELLS.top + 1), 2, vec(1, 1, 1, 1));
     }
 }
 
@@ -313,14 +313,14 @@ func active_end(state, phase, written) {
 
 func pointer(state, e) {
     let at = state.timeline_at;
-    if (at == null || state.move == null) { return; }
+    if (at == null || state.move == null) return;
 
     // A drag keeps where the cells were as it started, a phase growing under the pointer makes them narrower and moved
     // them out from under it, and the drag ran away to twice the length
     if (e.kind == "down") {
-        if (swap_meter(state, at, e.at)) { return; }
+        if (swap_meter(state, at, e.at)) return;
         state.timeline_drag = merge(what_is_at(state, at, e.at), { at: at });
-        if (state.timeline_drag.kind == "frame") { go_to(state, at, e.at.x); }
+        if (state.timeline_drag.kind == "frame") go_to(state, at, e.at.x);
     } else if (e.kind == "drag" && state.timeline_drag != null) {
         drag_to(state, state.timeline_drag.at, e.at);
     } else if (e.kind == "up" && state.timeline_drag != null) {
@@ -351,7 +351,7 @@ func what_is_at(state, at, point) {
             let frame = written[marker];
             if (frame != null && point.y >= MARKS.bottom && point.y <= MARKS.top + 1) {
                 let x = cell_x(at, phase.first + frame);
-                if (point.x >= x - 2 && point.x <= x + at.cell + 2) { return { kind: "marker", marker: marker, phase: phase.name, first: phase.first, frames: phase.length }; }
+                if (point.x >= x - 2 && point.x <= x + at.cell + 2) return { kind: "marker", marker: marker, phase: phase.name, first: phase.first, frames: phase.length };
             }
         }
 

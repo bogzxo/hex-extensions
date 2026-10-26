@@ -46,7 +46,7 @@ func on_start(hex) {
         icon: "symbol-event",
         layout: "move_view.hor",
         when: "fight_move",
-        open: func(ui, file) { open_view(hex, ui, file); },
+        open: (ui, file) => { open_view(hex, ui, file); },
 
         // The values of the file are no use next to the move, the side goes while the view is up (Ctrl+Alt+B for it anyway)
         right: false
@@ -62,24 +62,21 @@ func open_view(hex, ui, file) {
 
 // A file ran again (it was typed into, or edited), every view whose fighter has it reads its moves again
 func on_run(hex, file) {
-    for (each in views) {
-        let state = views[each];
-        if (uses(state, file)) { view.reload(state); }
+    for (each, state in views) {
+        if (uses(state, file)) view.reload(state);
     }
 }
 
 // A file of a fighter saved, its red boxes with it
 func on_save(hex, file) {
-    for (each in views) {
-        let state = views[each];
-        if (uses(state, file) && state.boxes_changed) { view.save_boxes(state); }
+    for (each, state in views) {
+        if (uses(state, file) && state.boxes_changed) view.save_boxes(state);
     }
 }
 
 // The art changed on the disk (it's watched), drawn again from the new one
 func on_file_changed(hex, path) {
-    for (each in views) {
-        let state = views[each];
+    for (each, state in views) {
         if (state.fighter != null && game.same_path(state.fighter.sprites, path)) {
             state.art = hex.sprite(path);
             state.traces = {};
@@ -92,9 +89,9 @@ func on_file_changed(hex, path) {
 func on_settings(hex, ui) { fight.open_settings(hex, ui); }
 
 func uses(state, file) {
-    if (state.fighter == null) { return game.same_path(state.file, file); }
+    if (state.fighter == null) return game.same_path(state.file, file);
     for (own in state.fighter.files) {
-        if (game.same_path(own, file)) { return true; }
+        if (game.same_path(own, file)) return true;
     }
     return false;
 }
