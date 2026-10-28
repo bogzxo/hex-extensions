@@ -9,7 +9,6 @@ a newer version. An install is a copy of the folder into the `extensions` folder
 | --- | --- |
 | `emmet` | HTML abbreviations written out on Tab or Ctrl+E, `ul>li.item$*3` and the rest of Emmet's shorthand |
 | `hello_dolly` | A random greeting in the title bar every time Hex starts |
-| `markdown_preview` | Any Markdown file as it reads, next to its code, following it as it's typed |
 | `move_editor` | Fighter2D's moves edited on a timeline, frame by frame, with their boxes on the sprite |
 | `pretty_json` | JSON formatted, minified, its keys sorted, and checked as it's saved |
 | `snippets` | A word and Tab written out as the code it stands for, then Tab from one place in it to the next |
