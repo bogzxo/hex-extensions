@@ -1,0 +1,177 @@
+// Codex as an agent system of Hex's. Codex starts one MCP connection a chat and wants the editor open already, so it
+// connects with --mcp-connect, which never opens a window of its own. From the Agents panel it runs codex exec --json,
+// every item it says (a message, its reasoning, a command, a file changed, an MCP call, a search) a row there, with
+// Hex's server handed to it by -c so its config needn't have it. Its config is the user's own, ~/.codex/config.toml, so
+// connecting asks first and only ever adds the hex server, and teaching writes a few lines in the folder's AGENTS.md.
+let extension = {
+    name: "Codex",
+    description: "Codex connected to Hex and run from the Agents panel, finding code through Hex's index instead of rg and whole files.",
+    version: "1.2.0",
+    author: "bogz",
+    settings: {
+        budget: { title: "Answer size", about: "The most characters a harness answer is for Codex when it doesn't say, about four to a token.", kind: "number", least: 1000, most: 60000, step: 1000, default: 6000 },
+        program: { title: "Program", about: "The codex Hex runs from the Agents panel, a name on PATH or a whole path.", kind: "text", default: "codex" },
+        model: { title: "Model", about: "The model it asks for, its own default when empty.", kind: "text", default: "" },
+        effort: { title: "Reasoning", about: "How hard it thinks, its own default when empty.", kind: "choice",
+            choices: ["", "minimal", "low", "medium", "high"], labels: ["Default", "Minimal", "Low", "Medium", "High"], default: "" },
+        sandbox: { title: "Sandbox", about: "What the commands it runs may touch.", kind: "choice",
+            choices: ["workspace-write", "read-only", "danger-full-access"], labels: ["The workspace", "Read only", "Everything"],
+            help: ["Writes in the workspace, reads anywhere.", "Reads, writes nothing.", "No sandbox at all, careful."], default: "workspace-write" }
+    }
+};
+
+let instructions = "Find code through Hex before rg or reading whole files. hex_map to see the workspace, hex_symbols for declarations, hex_search for text (ranked, grouped by file), hex_refs for uses of a name, hex_skim for what files are, hex_read with a symbol for one method or class. Answers are path:line and end with the index generation, hex_changes says what moved since. hex_terminal_run runs a command and waits for it.";
+
+// What the Agents panel offers over its box for Codex, each kept in the setting of its id
+let options = [
+    { id: "model", title: "Model", icon: "sparkle", choices: [
+        { value: "", label: "Default model" }, { value: "gpt-5-codex", label: "GPT-5 Codex" }, { value: "gpt-5", label: "GPT-5" }] },
+    { id: "effort", title: "Reasoning", icon: "lightbulb", choices: [
+        { value: "", label: "Default effort" }, { value: "low", label: "Low" }, { value: "medium", label: "Medium" }, { value: "high", label: "High" }] },
+    { id: "sandbox", title: "Sandbox", icon: "shield", choices: [
+        { value: "workspace-write", label: "Workspace" }, { value: "read-only", label: "Read only" }, { value: "danger-full-access", label: "Everything" }] }
+];
+
+let teach_start = "<!-- hex tools -->";
+let teach_end = "<!-- /hex tools -->";
+let teaching = "## Finding code\n\nThis folder is open in Hex, which Codex reaches as the `hex` MCP server. Use its tools before rg or reading whole files.\n\n- `hex_map`, `hex_files` for the layout, `hex_symbols` for declarations, `hex_refs` for uses\n- `hex_search` text or a regex, ranked and grouped by file\n- `hex_skim` what files are, `hex_read` with a symbol for one method or class\n- `hex_terminal_run` to run a command and wait, `hex_changes` for what moved since an answer\n";
+
+func on_start(hex) {
+    if (hex.agent == null) {
+        hex.say("needs a Hex with the agent harness (hex.agent)");
+        return;
+    }
+    say_who(hex);
+    hex.command("Connect Codex to Hex", hex => connect(hex));
+    hex.command("Teach Codex the Hex tools", hex => teach(hex));
+}
+
+func on_setting(hex, name, value) { say_who(hex); }
+
+// Tells the harness who Codex is and how to run it, again whenever its settings change
+func say_who(hex) {
+    hex.agent({
+        id: "codex",
+        name: "Codex",
+        clients: ["codex"],
+        budget: hex.setting("budget"),
+        instructions: instructions,
+        run: {
+            program: hex.setting("program"),
+            icon: "terminal",
+            install: "Install it with npm install -g @openai/codex, or say where it is in Codex's settings.",
+            stdin: true,
+            options: options,
+            arguments: (prompt, chat) => arguments_for(hex, chat),
+            on_event: (chat, event) => heard(chat, event)
+        }
+    });
+}
+
+// What codex exec is run with for a turn, - for the prompt on its stdin, resume with the thread it was in so the chat
+// goes on. Hex's server is given as config on the line, its paths with forward slashes so TOML takes them as they are
+func arguments_for(hex, chat) {
+    let server = hex.mcp_server();
+    let quoted = server.args.map(each => "\"" + each.replace("\\", "/") + "\"");
+    let arguments = ["exec", "--json", "--skip-git-repo-check", "--sandbox", hex.setting("sandbox"),
+        "-c", "mcp_servers.hex.command=\"" + server.command.replace("\\", "/") + "\"",
+        "-c", "mcp_servers.hex.args=[" + quoted.join(",") + "]"];
+    let model = hex.setting("model").trim();
+    if (len(model) > 0) {
+        arguments.push("--model");
+        arguments.push(model);
+    }
+    let effort = hex.setting("effort") ?? "";
+    if (len(effort) > 0) {
+        arguments.push("-c");
+        arguments.push("model_reasoning_effort=\"" + effort + "\"");
+    }
+    let thread = chat.session();
+    if (thread != null) {
+        arguments.push("resume");
+        arguments.push(thread);
+    }
+    arguments.push("-");
+    return arguments;
+}
+
+// A line of codex exec --json, what it says on the panel's rows
+func heard(chat, event) {
+    let item = event.item;
+    if (event.type == "thread.started") chat.session(event.thread_id);
+    else if (event.type == "item.started" && item != null) started(chat, item);
+    else if (event.type == "item.completed" && item != null) completed(chat, item);
+    else if (event.type == "turn.completed") {
+        let used = event.usage ?? {};
+        chat.usage({ input: used.input_tokens ?? 0, output: used.output_tokens ?? 0 });
+        chat.done();
+    }
+    else if (event.type == "turn.failed") {
+        chat.error(event.error?.message ?? "the turn failed");
+        chat.done();
+    }
+    else if (event.type == "error") chat.error(event.message ?? "something went wrong");
+}
+
+// An item that takes a while, a row that's running until it's completed
+func started(chat, item) {
+    if (item.type == "command_execution") chat.tool(item.id, "command", item.command);
+    else if (item.type == "mcp_tool_call") chat.tool(item.id, "mcp__" + item.server + "__" + item.tool, item.arguments ?? "");
+    else if (item.type == "web_search") chat.tool(item.id, "web_search", item.query ?? "");
+    else if (item.type == "file_change") chat.tool(item.id, "file_change", changes_of(item));
+}
+
+func completed(chat, item) {
+    if (item.type == "agent_message") chat.text(item.text ?? "");
+    else if (item.type == "reasoning") chat.thinking(item.text ?? "");
+    else if (item.type == "command_execution") chat.tool_done(item.id, item.exit_code == 0, item.aggregated_output ?? "");
+    else if (item.type == "mcp_tool_call") chat.tool_done(item.id, item.status != "failed", item.result ?? item.error ?? "");
+    else if (item.type == "web_search") chat.tool_done(item.id, true, item.query ?? "");
+    else if (item.type == "file_change") {
+        // Codex says a file change once it's made, so its row starts and ends here
+        chat.tool(item.id, "file_change", changes_of(item));
+        chat.tool_done(item.id, item.status != "failed", changes_of(item));
+    }
+    else if (item.type == "todo_list") chat.note((item.items ?? []).map(each => (each.completed ? "[x] " : "[ ] ") + each.text).join("\n"));
+    else if (item.type == "error") chat.error(item.message ?? "something went wrong");
+}
+
+// What a file change changed, a line a file with how
+func changes_of(item) {
+    return (item.changes ?? []).map(change => change.kind + " " + change.path).join("\n");
+}
+
+// The hex server added to ~/.codex/config.toml, after asking since it's the user's file and not the folder's
+func connect(hex) {
+    let config = hex.home + "/.codex/config.toml";
+    let text = hex.exists(config) ? hex.read(config) : "";
+    if (text.contains("[mcp_servers.hex]")) {
+        hex.notify("Codex has a hex server already, in " + config);
+        return;
+    }
+    hex.ask({ title: "Connect Codex", text: "Add the hex server to " + config + "? Hex has to be open with its MCP server on for Codex to reach it.", buttons: ["Add it", "Cancel"] }, (hex, pressed) => {
+        if (pressed != "Add it") return;
+        let section = "[mcp_servers.hex]\ncommand = '" + hex.executable + "'\nargs = [\"--mcp-connect\"]\n";
+        hex.write(config, len(text) == 0 ? section : text.trim_end() + "\n\n" + section);
+        hex.notify("Codex reaches Hex as the hex server from its next chat");
+    });
+}
+
+// The block about the tools in the folder's AGENTS.md, put in place of the one there or added at the end
+func teach(hex) {
+    let folders = hex.workspace();
+    if (len(folders) == 0) {
+        hex.say("open a folder first");
+        return;
+    }
+    let file = folders[0] + "/AGENTS.md";
+    let text = hex.exists(file) ? hex.read(file) : "";
+    let block = teach_start + "\n" + teaching + teach_end;
+    let from = text.index_of(teach_start);
+    let to = text.index_of(teach_end);
+    if (from >= 0 && to > from) text = text.substring(0, from) + block + text.substring(to + len(teach_end));
+    else if (len(text) == 0) text = block + "\n";
+    else text = text.trim_end() + "\n\n" + block + "\n";
+    hex.write(file, text);
+    hex.notify("AGENTS.md says how to use Hex's tools now");
+}

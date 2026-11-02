@@ -1,0 +1,174 @@
+// Claude Code as an agent system of Hex's. It tells the agent harness who it is (what Claude Code calls itself as it
+// connects, how long its answers can be and what it's told to do first) and how to run it from the Agents panel, claude
+// -p with its stream of JSON read into the panel's rows, Hex's own tools handed to it as an MCP server. And it has the
+// two commands that set Claude Code up for a folder, the hex server in the folder's .mcp.json and a few lines in its
+// CLAUDE.md about the tools.
+let extension = {
+    name: "Claude Code",
+    description: "Claude Code connected to Hex, finding code through Hex's index instead of grep and whole files.",
+    version: "1.2.0",
+    author: "bogz",
+    settings: {
+        budget: { title: "Answer size", about: "The most characters a harness answer is for Claude Code when it doesn't say, about four to a token.", kind: "number", least: 1000, most: 60000, step: 1000, default: 8000 },
+        server: { title: "Server name", about: "What the server is called in .mcp.json, its tools are mcp__ this __ to Claude Code.", kind: "text", default: "hex" },
+        program: { title: "Program", about: "The claude Hex runs from the Agents panel, a name on PATH or a whole path.", kind: "text", default: "claude" },
+        model: { title: "Model", about: "The model it asks for, sonnet, opus or a whole name, its own default when empty.", kind: "text", default: "" },
+        permission_mode: { title: "Permissions", about: "What it may do without asking, since nobody's there to be asked in the panel.", kind: "choice",
+            choices: ["acceptEdits", "default", "plan", "bypassPermissions"], labels: ["Edits accepted", "Ask (refused)", "Plan only", "Anything"],
+            help: ["Changes files, runs only what's allowed.", "Anything that would ask is refused.", "Reads and plans, changes nothing.", "Runs anything at all, careful."], default: "acceptEdits" },
+        allowed_tools: { title: "Allowed tools", about: "Tools it may use without asking, a space between them. Hex's are mcp__hex.", kind: "text", default: "mcp__hex Read Grep Glob" }
+    }
+};
+
+// What Claude Code is told as it connects, after what Hex tells every agent
+let instructions = "Find code through Hex before grep or reading whole files. hex_map once to see the workspace, hex_symbols for where something is declared, hex_search for text (ranked, grouped by file), hex_refs for where a name is used, hex_skim for what files are, hex_read with a symbol to read one method or class instead of the file. Every answer is path:line and ends with the index generation, hex_changes says what moved since. hex_terminal_run runs a command and waits for it, the hex_notebook tools take a notebook's path.";
+
+// What the Agents panel offers over its box for Claude Code, each kept in the setting of its id
+let options = [
+    { id: "model", title: "Model", icon: "sparkle", choices: [
+        { value: "", label: "Default model" }, { value: "opus", label: "Opus" }, { value: "sonnet", label: "Sonnet" }, { value: "haiku", label: "Haiku" }] },
+    { id: "permission_mode", title: "Permissions", icon: "shield", choices: [
+        { value: "acceptEdits", label: "Edits allowed" }, { value: "default", label: "Ask first" }, { value: "plan", label: "Plan only" }, { value: "bypassPermissions", label: "Anything" }] }
+];
+
+// The block it writes into CLAUDE.md, between markers so it's found and put right again rather than written twice
+let teach_start = "<!-- hex tools -->";
+let teach_end = "<!-- /hex tools -->";
+let teaching = "## Finding code\n\nThis folder is open in Hex, connected as an MCP server. Find code with its tools before grep or reading whole files, they answer in a fraction of the tokens.\n\n- `hex_map` the folders and what's in them, `hex_files` a file by part of its name\n- `hex_symbols` where something is declared, `hex_refs` where a name is used\n- `hex_search` text or a regex, ranked and grouped by file\n- `hex_skim` what files are without reading them, `hex_read` with a symbol for one method or class\n- `hex_terminal_run` runs a command and waits for it, `hex_changes` says what changed since an answer\n";
+
+func on_start(hex) {
+    if (hex.agent == null) {
+        hex.say("needs a Hex with the agent harness (hex.agent)");
+        return;
+    }
+    say_who(hex);
+    hex.command("Connect Claude Code to this folder", hex => connect(hex));
+    hex.command("Teach Claude Code the Hex tools", hex => teach(hex));
+}
+
+func on_setting(hex, name, value) { say_who(hex); }
+
+// Tells the harness who Claude Code is and how to run it, again whenever its settings change
+func say_who(hex) {
+    hex.agent({
+        id: "claude_code",
+        name: "Claude Code",
+        clients: ["claude-code"],
+        budget: hex.setting("budget"),
+        instructions: instructions,
+        run: {
+            program: hex.setting("program"),
+            icon: "sparkle",
+            install: "Install it with npm install -g @anthropic-ai/claude-code, or say where it is in Claude Code's settings.",
+            stdin: true,
+            options: options,
+            arguments: (prompt, chat) => arguments_for(hex, chat),
+            on_event: (chat, event) => heard(chat, event)
+        }
+    });
+}
+
+// What claude is run with for a turn, the prompt going in on its stdin. The hex server in a config file of its own, so
+// nothing of the folder's .mcp.json is needed, and the session it was in so the chat goes on
+func arguments_for(hex, chat) {
+    let config = hex.temp + "/claude-mcp.json";
+    hex.json_set(config, ["mcpServers", "hex"], hex.mcp_server());
+    let arguments = ["-p", "--output-format", "stream-json", "--verbose", "--mcp-config", config, "--permission-mode", hex.setting("permission_mode")];
+    let tools = hex.setting("allowed_tools").trim();
+    if (len(tools) > 0) {
+        arguments.push("--allowedTools");
+        arguments.push(tools);
+    }
+    let model = hex.setting("model").trim();
+    if (len(model) > 0) {
+        arguments.push("--model");
+        arguments.push(model);
+    }
+    let session = chat.session();
+    if (session != null) {
+        arguments.push("--resume");
+        arguments.push(session);
+    }
+    return arguments;
+}
+
+// A line of claude's stream-json, what it says on the panel's rows
+func heard(chat, event) {
+    if (event.type == "system" && event.subtype == "init") {
+        chat.session(event.session_id);
+        chat.usage({ model: event.model });
+        return;
+    }
+    if (event.type == "assistant") {
+        for (part in event.message?.content ?? []) {
+            if (part.type == "text") chat.text(part.text);
+            else if (part.type == "thinking") chat.thinking(part.thinking);
+            else if (part.type == "tool_use") chat.tool(part.id, part.name, part.input);
+        }
+        return;
+    }
+    if (event.type == "user") {
+        for (part in event.message?.content ?? []) {
+            if (part.type == "tool_result") chat.tool_done(part.tool_use_id, !(part.is_error ?? false), text_of(part.content));
+        }
+        return;
+    }
+    if (event.type == "result") {
+        chat.session(event.session_id);
+        let used = event.usage ?? {};
+        chat.usage({ input: (used.input_tokens ?? 0) + (used.cache_read_input_tokens ?? 0) + (used.cache_creation_input_tokens ?? 0), output: used.output_tokens ?? 0, cost: event.total_cost_usd ?? 0 });
+        if (event.is_error) chat.error(event.result ?? event.subtype);
+        chat.done();
+    }
+}
+
+// What a tool said back, a text or a list of parts of which the texts are kept
+func text_of(content) {
+    if (typeof(content) == "text") return content;
+    if (content == null) return "";
+    let said = [];
+    for (part in content) {
+        if (part?.type == "text") said.push(part.text);
+    }
+    return said.join("\n");
+}
+
+// The first folder of the workspace, or null having said why
+func folder_of(hex) {
+    let folders = hex.workspace();
+    if (len(folders) == 0) {
+        hex.say("open a folder first, Claude Code is set up for a folder");
+        return null;
+    }
+    return folders[0];
+}
+
+// The hex server in the folder's .mcp.json, the rest of the file left as it was
+func connect(hex) {
+    let folder = folder_of(hex);
+    if (folder == null) return;
+    let why = hex.json_set(folder + "/.mcp.json", ["mcpServers", hex.setting("server")], { command: hex.executable, args: ["--mcp"] });
+    if (why != null) {
+        hex.notify("couldn't write .mcp.json, " + why, true);
+        return;
+    }
+    hex.notify("Claude Code started in " + folder + " has Hex's tools now, it asks to trust the server the first time");
+}
+
+// The block about the tools in the folder's CLAUDE.md, put in place of the one there or added at the end
+func teach(hex) {
+    let folder = folder_of(hex);
+    if (folder == null) return;
+    let file = folder + "/CLAUDE.md";
+    hex.write(file, with_block(hex.exists(file) ? hex.read(file) : "", teach_start + "\n" + teaching + teach_end));
+    hex.notify("CLAUDE.md says how to use Hex's tools now");
+}
+
+// Text with the block between the markers swapped for a new one, or added after a blank line when it has none
+func with_block(text, block) {
+    let from = text.index_of(teach_start);
+    let to = text.index_of(teach_end);
+    if (from >= 0 && to > from) return text.substring(0, from) + block + text.substring(to + len(teach_end));
+    if (len(text) == 0) return block + "\n";
+    return text.trim_end() + "\n\n" + block + "\n";
+}

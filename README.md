@@ -7,6 +7,8 @@ a newer version. An install is a copy of the folder into the `extensions` folder
 
 | Extension | What it does |
 | --- | --- |
+| `claude_code` | Claude Code connected to Hex, its answer size, `.mcp.json` and a CLAUDE.md block about the tools |
+| `codex` | Codex connected to Hex through `--mcp-connect`, its answer size and an AGENTS.md block |
 | `emmet` | HTML abbreviations written out on Tab or Ctrl+E, `ul>li.item$*3` and the rest of Emmet's shorthand |
 | `hello_dolly` | A random greeting in the title bar every time Hex starts |
 | `move_editor` | Fighter2D's moves edited on a timeline, frame by frame, with their boxes on the sprite |
