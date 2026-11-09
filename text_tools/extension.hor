@@ -13,7 +13,7 @@ let extension = {
 };
 
 func on_start(hex) {
-    hex.command("Sort lines", hex => { lines_through(hex, lines => lines.copy().sort(), true); }, "Ctrl+F9");
+    hex.command("Sort lines", hex => { lines_through(hex, lines => lines.copy().sort(), true); });
     hex.command("Sort lines, ignoring case", hex => { lines_through(hex, lines => lines.copy().sort(line => line.lower()), true); });
     hex.command("Reverse lines", hex => { lines_through(hex, lines => lines.copy().reverse(), true); });
     hex.command("Unique lines", hex => { lines_through(hex, lines => lines.unique(), true); });
