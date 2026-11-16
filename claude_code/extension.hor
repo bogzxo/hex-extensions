@@ -6,13 +6,13 @@
 let extension = {
     name: "Claude Code",
     description: "Claude Code connected to Hex, finding code through Hex's index instead of grep and whole files.",
-    version: "1.2.0",
+    version: "1.5.0",
     author: "bogz",
     settings: {
         budget: { title: "Answer size", about: "The most characters a harness answer is for Claude Code when it doesn't say, about four to a token.", kind: "number", least: 1000, most: 60000, step: 1000, default: 8000 },
         server: { title: "Server name", about: "What the server is called in .mcp.json, its tools are mcp__ this __ to Claude Code.", kind: "text", default: "hex" },
         program: { title: "Program", about: "The claude Hex runs from the Agents panel, a name on PATH or a whole path.", kind: "text", default: "claude" },
-        model: { title: "Model", about: "The model it asks for, sonnet, opus or a whole name, its own default when empty.", kind: "text", default: "" },
+        model: { title: "Model", about: "The model it asks for, sonnet, opus or a whole name (claude-fable-5-2 for Fable), its own default when empty.", kind: "text", default: "" },
         permission_mode: { title: "Permissions", about: "What it may do without asking, since nobody's there to be asked in the panel.", kind: "choice",
             choices: ["acceptEdits", "default", "plan", "bypassPermissions"], labels: ["Edits accepted", "Ask (refused)", "Plan only", "Anything"],
             help: ["Changes files, runs only what's allowed.", "Anything that would ask is refused.", "Reads and plans, changes nothing.", "Runs anything at all, careful."], default: "acceptEdits" },
@@ -26,7 +26,8 @@ let instructions = "Find code through Hex before grep or reading whole files. he
 // What the Agents panel offers over its box for Claude Code, each kept in the setting of its id
 let options = [
     { id: "model", title: "Model", icon: "sparkle", choices: [
-        { value: "", label: "Default model" }, { value: "opus", label: "Opus" }, { value: "sonnet", label: "Sonnet" }, { value: "haiku", label: "Haiku" }] },
+        { value: "", label: "Default model" }, { value: "opus", label: "Opus" }, { value: "sonnet", label: "Sonnet" }, { value: "haiku", label: "Haiku" },
+        { value: "claude-fable-5-2", label: "Fable" }] },
     { id: "permission_mode", title: "Permissions", icon: "shield", choices: [
         { value: "acceptEdits", label: "Edits allowed" }, { value: "default", label: "Ask first" }, { value: "plan", label: "Plan only" }, { value: "bypassPermissions", label: "Anything" }] }
 ];
@@ -63,23 +64,27 @@ func say_who(hex) {
             stdin: true,
             options: options,
             arguments: (prompt, chat) => arguments_for(hex, chat),
+            message: (text, chat) => message_of(text),
             on_event: (chat, event) => heard(chat, event)
         }
     });
 }
 
-// What claude is run with for a turn, the prompt going in on its stdin. The hex server in a config file of its own, so
-// nothing of the folder's .mcp.json is needed, and the session it was in so the chat goes on
+// What claude is run with for a turn, the prompt going in on its stdin as a line of stream-json, which stays open so
+// what's asked while it works goes in too. It says back every message it takes in, so the panel knows it was. The hex
+// server in a config file of the chat's own, so nothing of the folder's .mcp.json is needed and chats running at once
+// don't write over each other's (the server told which chat it is, for the agents it starts), and the session it was in
+// so the chat goes on. What the chat was started with (an agent starting another with a model) over the settings
 func arguments_for(hex, chat) {
-    let config = hex.temp + "/claude-mcp.json";
-    hex.json_set(config, ["mcpServers", "hex"], hex.mcp_server());
-    let arguments = ["-p", "--output-format", "stream-json", "--verbose", "--mcp-config", config, "--permission-mode", hex.setting("permission_mode")];
+    let config = hex.temp + "/claude-mcp-" + chat.id + ".json";
+    hex.json_set(config, ["mcpServers", "hex"], hex.mcp_server(chat));
+    let arguments = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--replay-user-messages", "--verbose", "--mcp-config", config, "--permission-mode", option(hex, chat, "permission_mode")];
     let tools = hex.setting("allowed_tools").trim();
     if (len(tools) > 0) {
         arguments.push("--allowedTools");
         arguments.push(tools);
     }
-    let model = hex.setting("model").trim();
+    let model = option(hex, chat, "model").trim();
     if (len(model) > 0) {
         arguments.push("--model");
         arguments.push(model);
@@ -90,6 +95,16 @@ func arguments_for(hex, chat) {
         arguments.push(session);
     }
     return arguments;
+}
+
+// An option of the chat's when it was started with one, the setting otherwise
+func option(hex, chat, id) {
+    return chat.option(id) ?? hex.setting(id);
+}
+
+// A message for claude's stdin, what somebody asked as a user's turn of stream-json
+func message_of(text) {
+    return { type: "user", message: { role: "user", content: [{ type: "text", text: text }] } };
 }
 
 // A line of claude's stream-json, what it says on the panel's rows
@@ -108,6 +123,11 @@ func heard(chat, event) {
         return;
     }
     if (event.type == "user") {
+        // A message said back is one it took in, the first it was started with and every one asked as it worked
+        if (event.isReplay ?? false) {
+            chat.taken();
+            return;
+        }
         for (part in event.message?.content ?? []) {
             if (part.type == "tool_result") chat.tool_done(part.tool_use_id, !(part.is_error ?? false), text_of(part.content));
         }

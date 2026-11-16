@@ -6,14 +6,14 @@
 let extension = {
     name: "Codex",
     description: "Codex connected to Hex and run from the Agents panel, finding code through Hex's index instead of rg and whole files.",
-    version: "1.2.0",
+    version: "1.4.0",
     author: "bogz",
     settings: {
         budget: { title: "Answer size", about: "The most characters a harness answer is for Codex when it doesn't say, about four to a token.", kind: "number", least: 1000, most: 60000, step: 1000, default: 6000 },
         program: { title: "Program", about: "The codex Hex runs from the Agents panel, a name on PATH or a whole path.", kind: "text", default: "codex" },
-        model: { title: "Model", about: "The model it asks for, its own default when empty.", kind: "text", default: "" },
+        model: { title: "Model", about: "The model it asks for, such as gpt-6.1-sol, its own default when empty.", kind: "text", default: "" },
         effort: { title: "Reasoning", about: "How hard it thinks, its own default when empty.", kind: "choice",
-            choices: ["", "minimal", "low", "medium", "high"], labels: ["Default", "Minimal", "Low", "Medium", "High"], default: "" },
+            choices: ["", "low", "medium", "high", "xhigh", "max"], labels: ["Default", "Low", "Medium", "High", "Extra high", "Max"], default: "" },
         sandbox: { title: "Sandbox", about: "What the commands it runs may touch.", kind: "choice",
             choices: ["workspace-write", "read-only", "danger-full-access"], labels: ["The workspace", "Read only", "Everything"],
             help: ["Writes in the workspace, reads anywhere.", "Reads, writes nothing.", "No sandbox at all, careful."], default: "workspace-write" }
@@ -22,15 +22,36 @@ let extension = {
 
 let instructions = "Find code through Hex before rg or reading whole files. hex_map to see the workspace, hex_symbols for declarations, hex_search for text (ranked, grouped by file), hex_refs for uses of a name, hex_skim for what files are, hex_read with a symbol for one method or class. Answers are path:line and end with the index generation, hex_changes says what moved since. hex_terminal_run runs a command and waits for it.";
 
-// What the Agents panel offers over its box for Codex, each kept in the setting of its id
-let options = [
-    { id: "model", title: "Model", icon: "sparkle", choices: [
-        { value: "", label: "Default model" }, { value: "gpt-5-codex", label: "GPT-5 Codex" }, { value: "gpt-5", label: "GPT-5" }] },
-    { id: "effort", title: "Reasoning", icon: "lightbulb", choices: [
-        { value: "", label: "Default effort" }, { value: "low", label: "Low" }, { value: "medium", label: "Medium" }, { value: "high", label: "High" }] },
-    { id: "sandbox", title: "Sandbox", icon: "shield", choices: [
-        { value: "workspace-write", label: "Workspace" }, { value: "read-only", label: "Read only" }, { value: "danger-full-access", label: "Everything" }] }
-];
+// What the Agents panel offers over its box for Codex, each kept in the setting of its id. The models and efforts are the
+// ones codex has cached for itself when that file is there, a fixed list of current ones when it isn't
+func options_for(hex) {
+    let models = [{ value: "", label: "Default model" }];
+    let efforts = [{ value: "", label: "Default effort" }];
+    let known = ["low", "medium", "high", "xhigh", "max", "ultra"];
+    let names = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max", ultra: "Ultra" };
+    let seen = [];
+    let cache = hex.home + "/.codex/models_cache.json";
+    if (hex.exists(cache)) {
+        let cached = hex.json_parse(hex.read(cache));
+        for (model in cached?.models ?? []) {
+            if (model.visibility != "list") continue;
+            models.push({ value: model.slug, label: model.display_name ?? model.slug });
+            for (level in model.supported_reasoning_levels ?? []) seen.push(level.effort);
+        }
+    }
+    if (len(models) == 1) {
+        for (slug in ["gpt-6.1-sol", "gpt-6-astra", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"]) models.push({ value: slug, label: slug });
+        seen = ["low", "medium", "high", "xhigh", "max"];
+    }
+    for (level in known) if (seen.contains(level)) efforts.push({ value: level, label: names[level] });
+    for (level in seen) if (!known.contains(level) && !efforts.map(each => each.value).contains(level)) efforts.push({ value: level, label: level });
+    return [
+        { id: "model", title: "Model", icon: "sparkle", choices: models },
+        { id: "effort", title: "Reasoning", icon: "lightbulb", choices: efforts },
+        { id: "sandbox", title: "Sandbox", icon: "shield", choices: [
+            { value: "workspace-write", label: "Workspace" }, { value: "read-only", label: "Read only" }, { value: "danger-full-access", label: "Everything" }] }
+    ];
+}
 
 let teach_start = "<!-- hex tools -->";
 let teach_end = "<!-- /hex tools -->";
@@ -61,7 +82,7 @@ func say_who(hex) {
             icon: "terminal",
             install: "Install it with npm install -g @openai/codex, or say where it is in Codex's settings.",
             stdin: true,
-            options: options,
+            options: options_for(hex),
             arguments: (prompt, chat) => arguments_for(hex, chat),
             on_event: (chat, event) => heard(chat, event)
         }
@@ -69,19 +90,24 @@ func say_who(hex) {
 }
 
 // What codex exec is run with for a turn, - for the prompt on its stdin, resume with the thread it was in so the chat
-// goes on. Hex's server is given as config on the line, its paths with forward slashes so TOML takes them as they are
+// goes on. Hex's server is given as config on the line, its paths with forward slashes so TOML takes them as they are,
+// its calls given as long as hex_agent_wait waits (Codex gives up on a tool after a minute by itself), and switched on
+// in case the user's own config has it off, its tools let through without asking since nobody's there to say yes
 func arguments_for(hex, chat) {
-    let server = hex.mcp_server();
+    let server = hex.mcp_server(chat);
     let quoted = server.args.map(each => "\"" + each.replace("\\", "/") + "\"");
-    let arguments = ["exec", "--json", "--skip-git-repo-check", "--sandbox", hex.setting("sandbox"),
+    let arguments = ["exec", "--json", "--skip-git-repo-check", "--sandbox", option(hex, chat, "sandbox"),
         "-c", "mcp_servers.hex.command=\"" + server.command.replace("\\", "/") + "\"",
-        "-c", "mcp_servers.hex.args=[" + quoted.join(",") + "]"];
-    let model = hex.setting("model").trim();
+        "-c", "mcp_servers.hex.args=[" + quoted.join(",") + "]",
+        "-c", "mcp_servers.hex.tool_timeout_sec=660",
+        "-c", "mcp_servers.hex.enabled=true",
+        "-c", "mcp_servers.hex.default_tools_approval_mode=\"approve\""];
+    let model = option(hex, chat, "model").trim();
     if (len(model) > 0) {
         arguments.push("--model");
         arguments.push(model);
     }
-    let effort = hex.setting("effort") ?? "";
+    let effort = option(hex, chat, "effort") ?? "";
     if (len(effort) > 0) {
         arguments.push("-c");
         arguments.push("model_reasoning_effort=\"" + effort + "\"");
@@ -93,6 +119,11 @@ func arguments_for(hex, chat) {
     }
     arguments.push("-");
     return arguments;
+}
+
+// An option of the chat's when it was started with one (an agent starting it with a model), the setting otherwise
+func option(hex, chat, id) {
+    return chat.option(id) ?? hex.setting(id);
 }
 
 // A line of codex exec --json, what it says on the panel's rows
@@ -110,7 +141,8 @@ func heard(chat, event) {
         chat.error(event.error?.message ?? "the turn failed");
         chat.done();
     }
-    else if (event.type == "error") chat.error(event.message ?? "something went wrong");
+    // Warnings come as errors too, a turn that fails says so with turn.failed
+    else if (event.type == "error") chat.note(event.message ?? "something went wrong");
 }
 
 // An item that takes a while, a row that's running until it's completed
@@ -133,7 +165,8 @@ func completed(chat, item) {
         chat.tool_done(item.id, item.status != "failed", changes_of(item));
     }
     else if (item.type == "todo_list") chat.note((item.items ?? []).map(each => (each.completed ? "[x] " : "[ ] ") + each.text).join("\n"));
-    else if (item.type == "error") chat.error(item.message ?? "something went wrong");
+    // Codex says its warnings as error items, so they're notes and only turn.failed fails the turn
+    else if (item.type == "error") chat.note(item.message ?? "something went wrong");
 }
 
 // What a file change changed, a line a file with how
