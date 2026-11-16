@@ -9,8 +9,8 @@ a newer version. An install is a copy of the folder into the `extensions` folder
 | --- | --- |
 | `claude_code` | Claude Code connected to Hex, its answer size, `.mcp.json` and a CLAUDE.md block about the tools |
 | `codex` | Codex connected to Hex through `--mcp-connect`, its answer size and an AGENTS.md block |
-| `emmet` | HTML abbreviations written out on Tab or Ctrl+E, `ul>li.item$*3` and the rest of Emmet's shorthand |
-| `hello_dolly` | A random greeting in the title bar every time Hex starts |
+| `emmet` | HTML abbreviations written out on Tab or Ctrl+Alt+E, `ul>li.item$*3` and the rest of Emmet's shorthand |
+| `hello_dolly` | A random greeting in the title bar as Hex starts, and a new one every minute |
 | `move_editor` | Fighter2D's moves edited on a timeline, frame by frame, with their boxes on the sprite |
 | `pretty_json` | JSON formatted, minified, its keys sorted, and checked as it's saved |
 | `snippets` | A word and Tab written out as the code it stands for, then Tab from one place in it to the next |
@@ -29,7 +29,7 @@ stays here. Hex reads what an extension is from its extension object, so that's 
 ```
 let extension = {
     name: "Emmet",
-    description: "HTML abbreviations written out on Tab or Ctrl+E.",
+    description: "HTML abbreviations written out on Tab or Ctrl+Alt+E.",
     version: "1.0.0",
     author: "bogz"
 };

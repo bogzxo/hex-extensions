@@ -1,5 +1,5 @@
 // Emmet, HTML written short. An abbreviation typed before the caret, `ul>li.item$*3>a{Link $}`, becomes the HTML it
-// stands for on Tab (in the files it's switched on for, and only when the abbreviation looks like one) or on Ctrl+E (in
+// stands for on Tab (in the files it's switched on for, and only when the abbreviation looks like one) or on Ctrl+Alt+E (in
 // any file, whatever is before the caret). Ctrl+Z puts the abbreviation back.
 //
 //   div#main.wide          an element, an id and classes (.a.b), no name for a div (or an li in a list, a tr in a table...)
@@ -15,11 +15,11 @@
 // The caret goes in the first empty attribute or element, the expansion indented like the line it was typed on.
 let extension = {
     name: "Emmet",
-    description: "HTML abbreviations written out on Tab or Ctrl+E, ul>li.item$*3 and the rest of Emmet's shorthand.",
-    version: "1.0.0",
+    description: "HTML abbreviations written out on Tab or Ctrl+Alt+E, ul>li.item$*3 and the rest of Emmet's shorthand.",
+    version: "1.1.0",
     author: "bogz",
     settings: {
-        files: { title: "Files", about: "The kinds of file Tab writes abbreviations out in, by their endings. Ctrl+E works in any file.", kind: "text", default: ".html, .htm, .xhtml, .php, .vue, .svelte, .jsx, .tsx, .cshtml, .razor, .xml" },
+        files: { title: "Files", about: "The kinds of file Tab writes abbreviations out in, by their endings. Ctrl+Alt+E works in any file.", kind: "text", default: ".html, .htm, .xhtml, .php, .vue, .svelte, .jsx, .tsx, .cshtml, .razor, .xml" },
         tab: { title: "Expand on Tab", about: "Tab writes out the abbreviation before the caret, when there is one, and indents when there isn't.", kind: "flag", default: true },
         indent: { title: "Indent", about: "How many spaces a level of the expansion is indented by, 0 for a tab.", kind: "number", default: 4 }
     }
@@ -657,7 +657,7 @@ func expand_at_caret(hex, file, from_tab) {
 func on_start(hex) {
     hex.command("Expand abbreviation", hex => {
         if (!expand_at_caret(hex, hex.file(), false)) hex.say("no abbreviation before the caret");
-    }, "Ctrl+E");
+    }, "Ctrl+Alt+E");
 }
 
 // Tab in a file it's switched on for, the abbreviation before the caret written out if there's one
