@@ -1,7 +1,7 @@
 let extension = {
     name: "Goodbye, Dolly!",
-    description: "A random greeting in the title bar, every time Hex starts.",
-    version: "1.1.0",
+    description: "A random greeting in the title bar as Hex starts, and a new one every minute.",
+    version: "1.2.0",
     author: "bogz"
 };
 
@@ -16,41 +16,64 @@ let welcome_greetings = [
 	"With Hex you won't need to worry about dedocated wam.",
 	"You call that code??!",
 	"-_-",
+	"Abscence makes the heart grow fonder.",
+	"Alexa, cure me of self-loathing.",
+	"A better name would've'd been HexIDE, it even rolls of the tongue. whatever man.",
 	"'Rounded IDE cables provide no better performance.'",
 	"Dilapidated",
+	"Hex is so hot it would smoke cigarettes.",
 	"On a Friday?",
+	"Hex's per frame allocation budget maximum is 256b :-)",
 	"A little bit choppy but overall not too bad!",
 	"One line forward, two allocations backward.",
 	"It's happy hour somewhere..",
-	"Its like a Dell optiplex, but not really (i forgot where i was going with that)",
+	"Its like a Dell optiplex, but no not really (i forgot where i was going with that)",
 	"Vibecoder? I hardly know her!",
 	"Does anyone wanna implement Doom in HIDL?",
+	"it's not the same w/out u.",
 	"Yeah I ran out of ideas to put here...",
 	"Optimising this made me implement tick skipping into Horizon...",
 	"UI Compositing got my brain composting...",
+	"the air in my room feels different without you",
 	"Fuck it... UwU",
 	"Fuck it... NuWu",
+	"Oh the golorious burdern of genius...",
+	"i hope you miss me..",
 	"Guess who was single on Valentine's Day & Halloween :cry:",
 	"idk man, that does NOT look like good code to me!",
-	"A good project to learn Horizon is to implement a Super Ma- nintenDON'T SUE ME!",
 	"Honestly, man, I wrote this because the VSCode extension exhausted me.",
 	"Zopiclone doesn't work for my anymore, this sentence only took 2 minutes to type.",
 	"Caching icons referenced in labels ended up saving over 1MB/frame in allocations...",
 	"You should really take a break... I'm getting worried...",
+	"It's always been a psyop",
 	"This project started after a RAM consumption induced panic attack caused by VSCode.",
 	"A muon hit my brain cell and then this code diarrhea happened...",
 	"Nothing to be done.",
-	"Damn, I should implement a generic Form contro- no.. w- winforms.. :skull:",
+	"Damn, I should implement a generic Form contro- no.. w- winforms.. gdi... :skull:",
 	"I blame Vyvanse for this.",
+	"Here I am, stuck working with a bottom like you...",
 	"asdf",
 	"qwertyuiop",
+	"F360>SW",
+	"Did you know: my favourite ice cream flavour is vanilla?",
 	"Did you know: the original Xbox had, at least, 3 internal cables?"
 ];
 
-// Hex calls this once it starts up, with what it lets an extension do. A greeting, and a command in the palette for another
+// A greeting that isn't the one up there already, there's no fun in being greeted the same way twice
+let greeting = { shown: "" };
+func greet(hex) {
+	let next = math.pick(welcome_greetings);
+	while (next == greeting.shown) {
+		next = math.pick(welcome_greetings);
+	}
+	greeting.shown = next;
+	hex.title_note(next);
+}
+
+// Hex calls this once it starts up, with what it lets an extension do. A greeting, another every minute, and a command
+// in the palette for one straight away
 func on_start(hex) {
-	hex.title_note(math.pick(welcome_greetings));
-	hex.command("Another greeting", hex => {
-		hex.title_note(math.pick(welcome_greetings));
-	});
+	greet(hex);
+	hex.every(60, greet);
+	hex.command("Another greeting", greet);
 }
