@@ -78,7 +78,7 @@ func say_who(hex) {
             stdin: true,
             options: options,
             arguments: (prompt, chat) => arguments_for(hex, chat),
-            message: (text, chat) => message_of(text),
+            message: (text, chat) => message_of(text, chat),
             on_event: (chat, event) => heard(chat, event)
         }
     });
@@ -160,9 +160,15 @@ func option(hex, chat, id) {
     return chat.option(id) ?? hex.setting(id);
 }
 
-// A message for claude's stdin, what somebody asked as a user's turn of stream-json
-func message_of(text) {
-    return { type: "user", message: { role: "user", content: [{ type: "text", text: text }] } };
+// A message for claude's stdin, what somebody asked as a user's turn of stream-json, with the pictures pasted into it
+// in front as image blocks so it sees them as it reads the words. A Hex without chat.images has none to give
+func message_of(text, chat) {
+    let content = [];
+    if (chat != null && chat.images != null) {
+        for (image in chat.images()) content.push({ type: "image", source: { type: "base64", media_type: image.media_type, data: image.data } });
+    }
+    content.push({ type: "text", text: text });
+    return { type: "user", message: { role: "user", content: content } };
 }
 
 // A line of claude's stream-json, what it says on the panel's rows

@@ -131,6 +131,11 @@ func arguments_for(hex, chat) {
         arguments.push("resume");
         arguments.push(thread);
     }
+    // Pictures pasted into the message, by their files. Each its own --image= so the list doesn't take the - after it
+    // for a picture as well. A Hex without chat.images has none to give
+    if (chat.images != null) {
+        for (image in chat.images()) arguments.push("--image=" + image.path);
+    }
     arguments.push("-");
     return arguments;
 }
