@@ -1,0 +1,193 @@
+// Gemini CLI as an agent system of Hex's. From the Agents panel it runs gemini with the prompt on its stdin and its
+// stream-json output read into the panel's rows. Gemini takes its MCP servers from settings.json and has no flag for a
+// file of its own, so the hex server is written into the folder's .gemini/settings.json just before each run, the rest
+// of that file kept. The two commands set a folder up by hand, the hex server in that file and a few lines in GEMINI.md.
+let extension = {
+    name: "Gemini",
+    description: "Gemini CLI connected to Hex and run from the Agents panel, finding code through Hex's index instead of grep and whole files.",
+    version: "1.0.0",
+    author: "bogz",
+    settings: {
+        budget: { title: "Answer size", about: "The most characters a harness answer is for Gemini when it doesn't say, about four to a token.", kind: "number", least: 1000, most: 60000, step: 1000, default: 6000 },
+        server: { title: "Server name", about: "What the server is called in .gemini/settings.json, its tools are mcp_ this _ to Gemini.", kind: "text", default: "hex" },
+        program: { title: "Program", about: "The gemini Hex runs from the Agents panel, a name on PATH or a whole path.", kind: "text", default: "gemini" },
+        model: { title: "Model", about: "The model it asks for, such as gemini-3-pro-preview, its own default when empty.", kind: "text", default: "" },
+        approval_mode: { title: "Approvals", about: "What it may do without asking, since nobody's there to be asked in the panel.", kind: "choice",
+            choices: ["auto_edit", "default", "plan", "yolo"], labels: ["Edits accepted", "Ask (refused)", "Plan only", "Anything"],
+            help: ["Changes files, asks about the rest.", "Anything that would ask is refused.", "Reads and plans, changes nothing.", "Runs anything at all, careful."], default: "auto_edit" }
+    }
+};
+
+// What Gemini is told as it connects, after what Hex tells every agent
+let instructions = "Find code through Hex before grep or reading whole files. hex_map once to see the workspace, hex_symbols for where something is declared, hex_search for text (ranked, grouped by file), hex_refs for where a name is used, hex_skim for what files are, hex_read with a symbol to read one method or class instead of the file. Every answer is path:line and ends with the index generation, hex_changes says what moved since. hex_terminal_run runs a command and waits for it.";
+
+// What the Agents panel offers over its box for Gemini, each kept in the setting of its id
+let options = [
+    { id: "model", title: "Model", icon: "sparkle", choices: [
+        { value: "", label: "Default model" }, { value: "gemini-3-pro-preview", label: "Gemini 3 Pro" }, { value: "gemini-3-flash-preview", label: "Gemini 3 Flash" },
+        { value: "gemini-2.5-pro", label: "Gemini 2.5 Pro" }, { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash" }] },
+    { id: "approval_mode", title: "Approvals", icon: "shield", choices: [
+        { value: "auto_edit", label: "Edits allowed" }, { value: "default", label: "Ask first" }, { value: "plan", label: "Plan only" }, { value: "yolo", label: "Anything" }] }
+];
+
+// Every Gemini model of the day has a million tokens of context, so that's what the panel is told when it says none
+let window = 1048576;
+
+// The text a chat has been streamed so far, by chat id. Gemini says its answer in chunks, which are one row here
+let pending = {};
+
+let teach_start = "<!-- hex tools -->";
+let teach_end = "<!-- /hex tools -->";
+let teaching = "## Finding code\n\nThis folder is open in Hex, which Gemini reaches as the `hex` MCP server. Use its tools before grep or reading whole files, they answer in a fraction of the tokens.\n\n- `hex_map` the folders and what's in them, `hex_files` a file by part of its name\n- `hex_symbols` where something is declared, `hex_refs` where a name is used\n- `hex_search` text or a regex, ranked and grouped by file\n- `hex_skim` what files are without reading them, `hex_read` with a symbol for one method or class\n- `hex_terminal_run` runs a command and waits for it, `hex_changes` says what changed since an answer\n";
+
+func on_start(hex) {
+    if (hex.agent == null) {
+        hex.say("needs a Hex with the agent harness (hex.agent)");
+        return;
+    }
+    say_who(hex);
+    hex.command("Connect Gemini to this folder", hex => connect(hex));
+    hex.command("Teach Gemini the Hex tools", hex => teach(hex));
+}
+
+func on_setting(hex, name, value) { say_who(hex); }
+
+// Tells the harness who Gemini is and how to run it, again whenever its settings change. Its MCP client calls itself
+// gemini-cli-mcp-client, the other name is there in case a version drops the suffix
+func say_who(hex) {
+    hex.agent({
+        id: "gemini",
+        name: "Gemini",
+        clients: ["gemini-cli-mcp-client", "gemini-cli"],
+        budget: hex.setting("budget"),
+        instructions: instructions,
+        run: {
+            program: hex.setting("program"),
+            icon: "sparkle",
+            install: "Install it with npm install -g @google/gemini-cli, or say where it is in Gemini's settings.",
+            stdin: true,
+            options: options,
+            arguments: (prompt, chat) => arguments_for(hex, chat),
+            on_event: (chat, event) => heard(chat, event)
+        }
+    });
+}
+
+// What gemini is run with for a turn. The prompt comes in on stdin, -p with nothing after it would be refused so it's
+// given as an empty text for stdin to be added to. The hex server goes into the folder's settings first, the server told
+// which chat it is for the agents it starts, trusted so its tools run without somebody to say yes, and the folder
+// trusted for this run since Gemini won't start a stdio server in one it doesn't know. The session is resumed by its
+// id so the chat goes on
+func arguments_for(hex, chat) {
+    let folders = hex.workspace();
+    if (len(folders) > 0) {
+        let server = hex.mcp_server(chat);
+        let why = hex.json_set(folders[0] + "/.gemini/settings.json", ["mcpServers", hex.setting("server")], { command: server.command, args: server.args, trust: true, timeout: 660000 });
+        if (why != null) chat.note("couldn't give Gemini the hex server, " + why);
+    }
+    let arguments = ["-p", "", "--output-format", "stream-json", "--skip-trust", "--approval-mode", option(hex, chat, "approval_mode")];
+    let model = option(hex, chat, "model").trim();
+    if (len(model) > 0) {
+        arguments.push("--model");
+        arguments.push(model);
+    }
+    let session = chat.session();
+    if (session != null) {
+        arguments.push("--resume");
+        arguments.push(session);
+    }
+    return arguments;
+}
+
+// An option of the chat's when it was started with one, the setting otherwise
+func option(hex, chat, id) {
+    return chat.option(id) ?? hex.setting(id);
+}
+
+// What the chat has streamed so far, said as one row
+func flush(chat) {
+    let said = pending[chat.id] ?? "";
+    pending[chat.id] = "";
+    if (len(said.trim()) > 0) chat.text(said);
+}
+
+// A line of gemini's stream-json, what it says on the panel's rows
+func heard(chat, event) {
+    if (event.type == "init") {
+        chat.session(event.session_id);
+        chat.usage({ model: event.model });
+    }
+    else if (event.type == "message") {
+        // The user's own message is said back, only what it answers is the chat's
+        if (event.role == "assistant") pending[chat.id] = (pending[chat.id] ?? "") + (event.content ?? "");
+    }
+    else if (event.type == "tool_use") {
+        flush(chat);
+        chat.tool(event.tool_id, event.tool_name, event.parameters ?? {});
+    }
+    else if (event.type == "tool_result") {
+        chat.tool_done(event.tool_id, event.status != "error", event.output ?? event.error?.message ?? "");
+    }
+    else if (event.type == "error") {
+        flush(chat);
+        trouble(chat, event.message ?? "something went wrong", event.severity == "error");
+    }
+    else if (event.type == "result") {
+        flush(chat);
+        let used = event.stats ?? {};
+        chat.usage({ input: used.input_tokens ?? 0, output: used.output_tokens ?? 0, cache_read: used.cached ?? 0, context_limit: window });
+        if (event.status == "error") trouble(chat, event.error?.message ?? "the turn failed", true);
+        chat.done();
+    }
+}
+
+// A warning or an error of Gemini's. Quota and rate limits are the panel's limit, a retry is said as one, the rest are
+// notes and errors. Each of the chat's new members is there only in a Hex that has it
+func trouble(chat, message, fatal) {
+    let lower = message.lower();
+    let limited = lower.contains("429") || lower.contains("resource_exhausted") || lower.contains("quota") || lower.contains("rate limit");
+    if (limited && chat.limit != null) chat.limit({ kind: "usage", status: "hit", message: message });
+    else if (lower.contains("retry") && chat.retry != null) chat.retry({ attempt: 0, most: 0, delay: 0, why: message });
+    else if (fatal) chat.error(message);
+    else chat.note(message);
+}
+
+// The first folder of the workspace, or null having said why
+func folder_of(hex) {
+    let folders = hex.workspace();
+    if (len(folders) == 0) {
+        hex.say("open a folder first, Gemini is set up for a folder");
+        return null;
+    }
+    return folders[0];
+}
+
+// The hex server in the folder's .gemini/settings.json, the rest of the file left as it was
+func connect(hex) {
+    let folder = folder_of(hex);
+    if (folder == null) return;
+    let why = hex.json_set(folder + "/.gemini/settings.json", ["mcpServers", hex.setting("server")], { command: hex.executable, args: ["--mcp"], trust: true });
+    if (why != null) {
+        hex.notify("couldn't write .gemini/settings.json, " + why, true);
+        return;
+    }
+    hex.notify("Gemini started in " + folder + " has Hex's tools now, in a folder it trusts");
+}
+
+// The block about the tools in the folder's GEMINI.md, put in place of the one there or added at the end
+func teach(hex) {
+    let folder = folder_of(hex);
+    if (folder == null) return;
+    let file = folder + "/GEMINI.md";
+    hex.write(file, with_block(hex.exists(file) ? hex.read(file) : "", teach_start + "\n" + teaching + teach_end));
+    hex.notify("GEMINI.md says how to use Hex's tools now");
+}
+
+// Text with the block between the markers swapped for a new one, or added after a blank line when it has none
+func with_block(text, block) {
+    let from = text.index_of(teach_start);
+    let to = text.index_of(teach_end);
+    if (from >= 0 && to > from) return text.substring(0, from) + block + text.substring(to + len(teach_end));
+    if (len(text) == 0) return block + "\n";
+    return text.trim_end() + "\n\n" + block + "\n";
+}
