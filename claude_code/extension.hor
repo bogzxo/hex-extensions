@@ -6,7 +6,7 @@
 let extension = {
     name: "Claude Code",
     description: "Claude Code connected to Hex, finding code through Hex's index instead of grep and whole files.",
-    version: "1.8.0",
+    version: "1.9.0",
     author: "bogz",
     settings: {
         budget: { title: "Answer size", about: "The most characters a harness answer is for Claude Code when it doesn't say, about four to a token.", kind: "number", least: 1000, most: 60000, step: 1000, default: 8000 },
@@ -20,6 +20,9 @@ let extension = {
             choices: ["", "low", "medium", "high", "xhigh", "max"], labels: ["Default", "Low", "Medium", "High", "Extra high", "Max"], default: "" },
         fallback_model: { title: "Fallback model", about: "The model it falls back on while the one asked for is overloaded, a comma between several, none when empty.", kind: "text", default: "" },
         max_budget: { title: "Budget a turn", about: "The most dollars a turn may spend before it stops, no limit at 0.", kind: "number", least: 0, most: 1000, step: 1, default: 0 },
+        harness_guard: { title: "Keep it on the harness", about: "What happens when it reaches for grep, find, cat or its own Grep and Glob over the workspace.", kind: "choice",
+            choices: ["insist", "remind", "off"], labels: ["Turned back to Hex's tools", "Reminded of Hex's tools", "Left alone"],
+            help: ["The call is refused with the Hex tool that does it, so it uses that.", "The call runs, with the Hex tool for it said beside it.", "Nothing is said."], default: "insist" },
         allowed_tools: { title: "Allowed tools", about: "Tools it may use without asking, a space between them. Hex's are mcp__hex.", kind: "text", default: "mcp__hex Read Grep Glob" }
     }
 };
@@ -105,6 +108,18 @@ func arguments_for(hex, chat) {
         });
         arguments.push("--agents");
         arguments.push(agents);
+    }
+    // Told in its system prompt, it still drifts back to grep and cat as a long session leaves the prompt behind, so
+    // Hex itself is the hook it runs before its shell, Grep and Glob, which turns a read of the workspace back to the
+    // harness. In a settings file of the chat's own, the user's own settings kept as they are
+    let guard = hex.setting("harness_guard") ?? "insist";
+    if (guard != "off" && hex.harness_rules != null && hex.executable != null) {
+        let hook = "\"" + hex.executable.replace("\\", "/") + "\" --harness-hook --guard " + guard;
+        for (folder in hex.workspace()) hook = hook + " --folder \"" + folder.replace("\\", "/") + "\"";
+        let settings = hex.temp + "/claude-settings-" + chat.id + ".json";
+        hex.json_set(settings, ["hooks"], { PreToolUse: [{ matcher: "Bash|Grep|Glob|PowerShell", hooks: [{ type: "command", command: hook, timeout: 10 }] }] });
+        arguments.push("--settings");
+        arguments.push(settings);
     }
     let tools = hex.setting("allowed_tools").trim();
     if (len(tools) > 0) {
