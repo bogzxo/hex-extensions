@@ -100,6 +100,8 @@ func say_who(hex) {
             message: (text, chat) => message_of(hex, text, chat),
             // Stop interrupts the turn going on, its thread left whole, nothing said when there's none (it's killed)
             stop: chat => stop_of(chat),
+            // The message Hex compacts with, turned into thread/compact/start once the thread is taken up
+            compact: "/compact",
             on_event: (chat, event) => heard(chat, event)
         }
     });
@@ -169,6 +171,8 @@ func message_of(hex, text, chat) {
 
     said.prompt = text;
     said.images = images;
+    // /compact sums up the thread's context once it's taken up, in place of a turn
+    said.compact = text.trim() == "/compact" && said.thread != null;
     let rules = (hex.harness_rules ?? "") + "\n" + instructions;
     let thread = said.thread != null
         ? { id: 2, method: "thread/resume", params: { threadId: said.thread, approvalPolicy: "untrusted", sandbox: option(hex, chat, "sandbox"), developerInstructions: rules, excludeTurns: true } }
@@ -219,7 +223,14 @@ func heard(chat, event) {
     }
     else if (method == "thread/tokenUsage/updated") counted(chat, said, params.tokenUsage);
     else if (method == "account/rateLimits/updated") limits_said(chat, params.rateLimits);
-    else if (method == "thread/compacted") chat.compacted({ trigger: "auto" });
+    else if (method == "thread/compacted") {
+        chat.compacted({ trigger: said.compact == true ? "manual" : "auto" });
+        // Compacting as asked is all there is to that turn, ended here should no turn/completed follow
+        if (said.compact == true && said.turn == null) {
+            said.compact = false;
+            chat.done();
+        }
+    }
     else if (method == "error") {
         let message = params.error?.message ?? "something went wrong";
         if (params.willRetry == true) chat.retry({ attempt: 0, why: message });
@@ -239,6 +250,10 @@ func answered(chat, said, event) {
     if (event.id == 2) {
         said.thread = result.thread?.id ?? said.thread;
         if (said.thread != null) chat.session(said.thread);
+        if (said.compact == true) {
+            chat.write({ id: 3, method: "thread/compact/start", params: { threadId: said.thread } });
+            return;
+        }
         let turn = { threadId: said.thread, input: input_of(said.prompt ?? "", said.images) };
         let effort = option(hex_of.hex, chat, "effort") ?? "";
         if (len(effort) > 0) turn.effort = effort;
