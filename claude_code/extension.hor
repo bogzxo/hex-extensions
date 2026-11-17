@@ -44,7 +44,11 @@ let teach_start = "<!-- hex tools -->";
 let teach_end = "<!-- /hex tools -->";
 let teaching = "## Finding code\n\nThis folder is open in Hex, connected as an MCP server. Find code with its tools before grep or reading whole files, they answer in a fraction of the tokens.\n\n- `hex_map` the folders and what's in them, `hex_files` a file by part of its name\n- `hex_symbols` where something is declared, `hex_refs` where a name is used\n- `hex_search` text or a regex, ranked and grouped by file\n- `hex_skim` what files are without reading them, `hex_read` with a symbol for one method or class\n- `hex_terminal_run` runs a command and waits for it, `hex_changes` says what changed since an answer\n";
 
+// The hex object kept for the run's callbacks, which are only handed the chat and the line
+let hex_of = { hex: null };
+
 func on_start(hex) {
+    hex_of.hex = hex;
     if (hex.agent == null) {
         hex.say("needs a Hex with the agent harness (hex.agent)");
         return;
@@ -162,7 +166,9 @@ func heard(chat, event) {
     }
     if (event.type == "system" && event.subtype == "init") {
         chat.session(event.session_id);
-        chat.usage({ model: event.model });
+        // How much context the model has is only said as a turn ends, so a long first turn (a coordinator waiting on
+        // its agents) would show no bar until it's over. The window this model had last time is said at once instead
+        chat.usage({ model: event.model, context_limit: known_window(event.model) });
         return;
     }
     // Its context summed up to make room, by itself as it filled or because it was asked to with /compact. The
@@ -270,15 +276,40 @@ func limit_of(info) {
     return { kind: kind, status: info.status ?? "allowed", used: used, resets: resets, message: message };
 }
 
-// How much context the models of a turn have, the most of them, 0 when it didn't say
+// How much context the models of a turn have, the most of them, 0 when it didn't say. Each one's kept for the next
+// chat on it to know from its start
 func window_of(models) {
     let most = 0;
     if (models == null) return most;
     for (name in keys(models)) {
         let window = models[name]?.contextWindow ?? 0;
+        if (window > 0) remember_window(name, window);
         if (window > most) most = window;
     }
     return most;
+}
+
+// The context windows the models had, by name, kept in a file of Hex's temp folder so they last from run to run
+let windows = { known: null };
+
+func windows_file() { return hex_of.hex.temp + "/claude-windows.json"; }
+
+func known_window(model) {
+    if (model == null || hex_of.hex == null) return 0;
+    if (windows.known == null) {
+        windows.known = {};
+        if (hex_of.hex.exists(windows_file())) windows.known = hex_of.hex.json_parse(hex_of.hex.read(windows_file())) ?? {};
+    }
+    let window = windows.known[model] ?? 0;
+    // A model asked for with [1m] has a million tokens whether or not it was seen before
+    if (window == 0 && model.contains("[1m]")) window = 1000000;
+    return window;
+}
+
+func remember_window(model, window) {
+    if (hex_of.hex == null || known_window(model) == window) return;
+    windows.known[model] = window;
+    hex_of.hex.json_set(windows_file(), [model], window);
 }
 
 // A subagent's tool call said short, its name without the mcp__server__ in front and the part of what it was given
