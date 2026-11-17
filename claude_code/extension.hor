@@ -81,6 +81,8 @@ func say_who(hex) {
             message: (text, chat) => message_of(text, chat),
             // Stop asks it to end its turn, its session left whole to go on from, rather than it being killed
             stop: chat => interrupt_of(chat),
+            // The message that has it sum up its context to make room, its own slash command
+            compact: "/compact",
             on_event: (chat, event) => heard(chat, event)
         }
     });
