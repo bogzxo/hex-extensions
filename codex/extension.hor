@@ -98,6 +98,8 @@ func say_who(hex) {
             options: options_for(hex),
             arguments: (prompt, chat) => arguments_for(hex, chat),
             message: (text, chat) => message_of(hex, text, chat),
+            // Stop interrupts the turn going on, its thread left whole, nothing said when there's none (it's killed)
+            stop: chat => stop_of(chat),
             on_event: (chat, event) => heard(chat, event)
         }
     });
@@ -144,6 +146,14 @@ func conversation_of(chat, fresh) {
         conversations[chat.id] = said;
     }
     return said;
+}
+
+// The turn going on interrupted, null with no turn to interrupt
+func stop_of(chat) {
+    let said = conversation_of(chat, false);
+    if (said.turn == null || said.thread == null) return null;
+    said.next = said.next + 1;
+    return { id: said.next, method: "turn/interrupt", params: { threadId: said.thread, turnId: said.turn } };
 }
 
 // What goes on its stdin when something's asked. The start of a turn is the handshake and the thread, started or taken

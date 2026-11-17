@@ -79,6 +79,8 @@ func say_who(hex) {
             options: options_now(),
             arguments: (prompt, chat) => arguments_for(hex, chat),
             message: (text, chat) => message_of(text, chat),
+            // Stop asks it to end its turn, its session left whole to go on from, rather than it being killed
+            stop: chat => interrupt_of(chat),
             on_event: (chat, event) => heard(chat, event)
         }
     });
@@ -287,6 +289,11 @@ func options_now() {
     let now = [{ id: "model", title: "Model", icon: "sparkle", choices: discovered.models }];
     for (each in options) if (each.id != "model") now.push(each);
     return now;
+}
+
+// Its turn interrupted through its control protocol
+func interrupt_of(chat) {
+    return { type: "control_request", request_id: "hex-stop-" + chat.id, request: { subtype: "interrupt" } };
 }
 
 // A turn of the user's as stream-json
