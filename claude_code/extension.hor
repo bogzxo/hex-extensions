@@ -83,6 +83,8 @@ func say_who(hex) {
             stop: chat => interrupt_of(chat),
             // The message that has it sum up its context to make room, its own slash command
             compact: "/compact",
+            // Its slash commands, its own and the skills it found, as it said them in the handshake, for "/" in the box
+            commands: discovered.commands,
             on_event: (chat, event) => heard(chat, event)
         }
     });
@@ -277,10 +279,14 @@ func introduced(chat, said) {
         if (model.value == null) continue;
         models.push({ value: model.value == "default" ? "" : model.value, label: model.displayName ?? model.value, help: model.description });
     }
-    discovered.commands = said.commands ?? [];
-    let key = models.map(each => each.value + "=" + each.label).join("|");
-    if (len(models) == 0 || key == discovered.said) return;
-    discovered.models = models;
+    let commands = [];
+    for (command in said.commands ?? []) {
+        if (command.name != null) commands.push({ name: command.name, about: command.description ?? "", hint: command.argumentHint ?? "" });
+    }
+    let key = models.map(each => each.value + "=" + each.label).join("|") + "#" + commands.map(each => each.name).join("|");
+    if ((len(models) == 0 && len(commands) == 0) || key == discovered.said) return;
+    discovered.commands = commands;
+    if (len(models) > 0) discovered.models = models;
     discovered.said = key;
     if (hex_of.hex != null) say_who(hex_of.hex);
 }
