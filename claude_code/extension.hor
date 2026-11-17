@@ -76,7 +76,7 @@ func say_who(hex) {
             icon: "sparkle",
             install: "Install it with npm install -g @anthropic-ai/claude-code, or say where it is in Claude Code's settings.",
             stdin: true,
-            options: options,
+            options: options_now(),
             arguments: (prompt, chat) => arguments_for(hex, chat),
             message: (text, chat) => message_of(text, chat),
             on_event: (chat, event) => heard(chat, event)
@@ -92,6 +92,7 @@ func say_who(hex) {
 // its permission mode would ask about comes back on its stdout as a control request, asked of the person in the chat,
 // rather than refused because nobody is at its own prompt
 func arguments_for(hex, chat) {
+    introduce[chat.id] = true;
     let config = hex.temp + "/claude-mcp-" + chat.id + ".json";
     hex.json_set(config, ["mcpServers", "hex"], hex.mcp_server(chat));
     let arguments = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--replay-user-messages", "--verbose", "--mcp-config", config, "--permission-mode", option(hex, chat, "permission_mode"), "--permission-prompt-tool", "stdio"];
@@ -250,6 +251,46 @@ func leave_given(chat, id, input, allowed, message) {
 // A message for claude's stdin, what somebody asked as a user's turn of stream-json, with the pictures pasted into it
 // in front as image blocks so it sees them as it reads the words. A Hex without chat.images has none to give
 func message_of(text, chat) {
+    let message = user_message_of(text, chat);
+    // The first message of a run goes with the handshake an SDK starts with, whose answer says its models and commands
+    if (chat != null && introduce[chat.id] == true) {
+        introduce[chat.id] = false;
+        return [{ type: "control_request", request_id: "hex-init-" + chat.id, request: { subtype: "initialize" } }, message];
+    }
+    return message;
+}
+
+// The chats whose run hasn't been introduced yet, by the chat, set as each run starts
+let introduce = {};
+
+// What it said of itself the last time it was asked, its models for the picker and its slash commands
+let discovered = { models: [], commands: [], said: "" };
+
+// The answer to the handshake, its models in the picker by the names it gives them (Hex told again only when they changed)
+func introduced(chat, said) {
+    let models = [];
+    for (model in said.models ?? []) {
+        if (model.value == null) continue;
+        models.push({ value: model.value == "default" ? "" : model.value, label: model.displayName ?? model.value, help: model.description });
+    }
+    discovered.commands = said.commands ?? [];
+    let key = models.map(each => each.value + "=" + each.label).join("|");
+    if (len(models) == 0 || key == discovered.said) return;
+    discovered.models = models;
+    discovered.said = key;
+    if (hex_of.hex != null) say_who(hex_of.hex);
+}
+
+// The options with the models it said in place of those written here, once it's said them
+func options_now() {
+    if (len(discovered.models) == 0) return options;
+    let now = [{ id: "model", title: "Model", icon: "sparkle", choices: discovered.models }];
+    for (each in options) if (each.id != "model") now.push(each);
+    return now;
+}
+
+// A turn of the user's as stream-json
+func user_message_of(text, chat) {
     let content = [];
     if (chat != null && chat.images != null) {
         for (image in chat.images()) content.push({ type: "image", source: { type: "base64", media_type: image.media_type, data: image.data } });
@@ -264,6 +305,11 @@ func heard(chat, event) {
     // once with the Hex tool for it, anything else asked of the person in the chat, the answer written back on its stdin
     if (event.type == "control_request" && event.request?.subtype == "can_use_tool") {
         asked_leave(chat, event.request_id, event.request);
+        return;
+    }
+    if (event.type == "control_response") {
+        let response = event.response ?? {};
+        if ((response.request_id ?? "").starts_with("hex-init-") && response.subtype == "success") introduced(chat, response.response ?? {});
         return;
     }
     if (event.type == "control_cancel_request") {

@@ -27,7 +27,11 @@ let instructions = "Find code through Hex before rg or reading whole files. hex_
 // How much context each of the models codex has cached has, by its slug, for the Agents panel's details
 let windows = {};
 
+// Its models by the names it gives them, from its own cache, handed to Hex with each chat so they're said in full
+let model_names = { list: [] };
+
 func options_for(hex) {
+    model_names.list = [];
     let models = [{ value: "", label: "Default model" }];
     let efforts = [{ value: "", label: "Default effort" }];
     let known = ["low", "medium", "high", "xhigh", "max", "ultra"];
@@ -39,6 +43,7 @@ func options_for(hex) {
         for (model in cached?.models ?? []) {
             if (model.visibility != "list") continue;
             models.push({ value: model.slug, label: model.display_name ?? model.slug });
+            if (model.display_name != null) model_names.list.push({ id: model.slug, name: model.display_name });
             windows[model.slug] = model.context_window ?? 0;
             for (level in model.supported_reasoning_levels ?? []) seen.push(level.effort);
         }
@@ -145,6 +150,7 @@ func conversation_of(chat, fresh) {
 // up again, the turn itself going once the thread's said ready (heard). Asked while a turn's going, it's steered into it
 func message_of(hex, text, chat) {
     let said = conversation_of(chat, false);
+    if (chat.models != null) chat.models(model_names.list);
     let images = chat.images != null ? chat.images() : [];
     if (said.turn != null) {
         said.next = said.next + 1;
