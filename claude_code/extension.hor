@@ -220,7 +220,7 @@ func asked_questions(chat, id, input) {
             labels.push(label);
         }
         let text = asked.question ?? "?";
-        state.cards.push(chat.question(text, labels, recommended, question_seconds, answer => question_answered(chat, id, input, state, text, answer)));
+        state.cards.push(chat.question(text, labels, recommended, question_seconds, answer => question_answered(chat, id, input, state, text, answer), asked.multiSelect == true));
     }
     leave_asked[id] = () => withdraw_questions(state);
 }
