@@ -178,6 +178,10 @@ func asked_leave(chat, id, request) {
             return;
         }
     }
+    if (tool == "AskUserQuestion" && chat.question != null) {
+        asked_questions(chat, id, input);
+        return;
+    }
     // A Hex with no cards to ask on lets it through, as it did before it was asked at all
     if (chat.approval == null) {
         leave_given(chat, id, input, true, null);
@@ -185,6 +189,55 @@ func asked_leave(chat, id, request) {
     }
     let detail = input.command ?? input.file_path ?? input.description ?? "";
     leave_asked[id] = chat.approval((request.display_name ?? tool) + " wants to run", detail, allowed => leave_given(chat, id, input, allowed, "The person said no."));
+}
+
+// How long its questions wait for the person before it's told to go on with its own pick
+let question_seconds = 300;
+
+// Its own AskUserQuestion, a card in the chat for each question with its options, the one it marks (Recommended) taken as
+// its pick. Once every one is answered the answers go back in the tool's input, keyed by each question as it asked it.
+// One nobody answers in time ends them all, the tool refused with word to go on with what it judges best
+func asked_questions(chat, id, input) {
+    let questions = input.questions ?? [];
+    let state = { answers: {}, left: len(questions), over: false, cards: [] };
+    if (state.left == 0) {
+        leave_given(chat, id, input, true, null);
+        return;
+    }
+    for (asked in questions) {
+        let labels = [];
+        let recommended = null;
+        for (option in asked.options ?? []) {
+            let label = option.label ?? "";
+            if (recommended == null && label.ends_with("(Recommended)")) recommended = len(labels);
+            labels.push(label);
+        }
+        let text = asked.question ?? "?";
+        state.cards.push(chat.question(text, labels, recommended, question_seconds, answer => question_answered(chat, id, input, state, text, answer)));
+    }
+    leave_asked[id] = () => withdraw_questions(state);
+}
+
+// Every card of a tool's questions taken back, those answered already left as they are
+func withdraw_questions(state) {
+    state.over = true;
+    for (withdraw in state.cards) withdraw();
+}
+
+// One of its questions answered, or with null left unanswered
+func question_answered(chat, id, input, state, text, answer) {
+    if (state.over) return;
+    if (answer == null) {
+        withdraw_questions(state);
+        leave_given(chat, id, input, false, "Nobody answered in " + (question_seconds / 60) + " minutes. Go on with the option you judge best and say which you took.");
+        return;
+    }
+    state.answers[text] = answer;
+    state.left = state.left - 1;
+    if (state.left > 0) return;
+    state.over = true;
+    input.answers = state.answers;
+    leave_given(chat, id, input, true, null);
 }
 
 // The answer to a tool asked leave for, written on claude's stdin and the question forgotten
