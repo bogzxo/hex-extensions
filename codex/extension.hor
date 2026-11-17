@@ -48,6 +48,11 @@ func options_for(hex) {
             for (level in model.supported_reasoning_levels ?? []) seen.push(level.effort);
         }
     }
+    // What it said itself over its cache file, once a run has asked it
+    if (len(listed_models.list) > 0) {
+        models = [{ value: "", label: "Default model" }];
+        for (model in listed_models.list) models.push(model);
+    }
     if (len(models) == 1) {
         for (slug in ["gpt-6.1-sol", "gpt-6-astra", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"]) models.push({ value: slug, label: slug });
         seen = ["low", "medium", "high", "xhigh", "max"];
@@ -150,6 +155,29 @@ func conversation_of(chat, fresh) {
     return said;
 }
 
+// The models it said it has (model/list), their names to Hex and the picker made of them, Hex told again only when
+// they're not what it had
+let listed_models = { list: [], said: "" };
+
+func models_listed(chat, data) {
+    let models = [];
+    let names = [];
+    for (model in data) {
+        let id = model.model ?? model.id;
+        if (id == null || model.hidden == true) continue;
+        let name = model.displayName ?? id;
+        models.push({ value: id, label: name, help: model.description });
+        if (name != id) names.push({ id: id, name: name });
+    }
+    if (len(models) == 0) return;
+    if (chat.models != null) chat.models(names);
+    let key = models.map(each => each.value + "=" + each.label).join("|");
+    if (key == listed_models.said) return;
+    listed_models.said = key;
+    listed_models.list = models;
+    if (hex_of.hex != null) say_who(hex_of.hex);
+}
+
 // The turn going on interrupted, null with no turn to interrupt
 func stop_of(chat) {
     let said = conversation_of(chat, false);
@@ -180,6 +208,8 @@ func message_of(hex, text, chat) {
     return [
         { id: 1, method: "initialize", params: { clientInfo: { name: "hex", title: "Hex", version: "1" }, capabilities: { experimentalApi: true } } },
         { method: "initialized" },
+        // Its models as it has them now, the picker and their names put right by the answer (heard)
+        { id: 4, method: "model/list", params: {} },
         thread
     ];
 }
@@ -247,6 +277,10 @@ func answered(chat, said, event) {
         return;
     }
     let result = event.result ?? {};
+    if (event.id == 4) {
+        models_listed(chat, result.data ?? []);
+        return;
+    }
     if (event.id == 2) {
         said.thread = result.thread?.id ?? said.thread;
         if (said.thread != null) chat.session(said.thread);
