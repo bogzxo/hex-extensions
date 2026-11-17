@@ -6,7 +6,7 @@
 let extension = {
     name: "Claude Code",
     description: "Claude Code connected to Hex, finding code through Hex's index instead of grep and whole files.",
-    version: "1.5.0",
+    version: "1.6.0",
     author: "bogz",
     settings: {
         budget: { title: "Answer size", about: "The most characters a harness answer is for Claude Code when it doesn't say, about four to a token.", kind: "number", least: 1000, most: 60000, step: 1000, default: 8000 },
@@ -79,6 +79,22 @@ func arguments_for(hex, chat) {
     let config = hex.temp + "/claude-mcp-" + chat.id + ".json";
     hex.json_set(config, ["mcpServers", "hex"], hex.mcp_server(chat));
     let arguments = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--replay-user-messages", "--verbose", "--mcp-config", config, "--permission-mode", option(hex, chat, "permission_mode")];
+    // The harness said in the system prompt, where it weighs more than the server's instructions, so finding and
+    // reading code goes through Hex first. The shell is still there for what the harness doesn't do
+    if (hex.harness_rules != null) {
+        arguments.push("--append-system-prompt");
+        arguments.push(hex.harness_rules);
+        // Its own subagents are told nothing of what it was, so the Explore one it sends searching is made again here
+        // knowing the harness, in a file of the chat's own as the server is
+        let agents = hex.temp + "/claude-agents-" + chat.id + ".json";
+        hex.json_set(agents, ["Explore"], {
+            description: "Fast read-only agent for exploring the codebase, finding files, searching code and answering questions about it. Say how thorough to be, quick, medium or very thorough.",
+            prompt: "You explore a codebase and report back what you found, with path:line for everything, without changing anything. " + hex.harness_rules,
+            model: "haiku"
+        });
+        arguments.push("--agents");
+        arguments.push(agents);
+    }
     let tools = hex.setting("allowed_tools").trim();
     if (len(tools) > 0) {
         arguments.push("--allowedTools");
@@ -109,6 +125,18 @@ func message_of(text) {
 
 // A line of claude's stream-json, what it says on the panel's rows
 func heard(chat, event) {
+    // What a subagent of its own does comes with the id of the Task that started it, and goes on that Task's row as a
+    // step rather than rows of its own among the chat's
+    let parent = event.parent_tool_use_id;
+    if (parent != null && chat.progress != null) {
+        if (event.type == "assistant") {
+            for (part in event.message?.content ?? []) {
+                if (part.type == "tool_use") chat.progress(parent, step_of(part.name, part.input));
+                else if (part.type == "text" && len(part.text.trim()) > 0) chat.progress(parent, part.text.trim().split("\n")[0]);
+            }
+        }
+        return;
+    }
     if (event.type == "system" && event.subtype == "init") {
         chat.session(event.session_id);
         chat.usage({ model: event.model });
@@ -140,6 +168,16 @@ func heard(chat, event) {
         if (event.is_error) chat.error(event.result ?? event.subtype);
         chat.done();
     }
+}
+
+// A subagent's tool call said short, its name without the mcp__server__ in front and the part of what it was given
+// that says most
+func step_of(name, input) {
+    let parts = name.split("__");
+    let tool = parts[len(parts) - 1];
+    let what = input?.description ?? input?.query ?? input?.pattern ?? input?.symbol ?? input?.command ?? input?.file_path ?? input?.path ?? input?.paths ?? input?.name ?? "";
+    if (typeof(what) != "text") return tool;
+    return tool + " " + what;
 }
 
 // What a tool said back, a text or a list of parts of which the texts are kept

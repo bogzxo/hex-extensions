@@ -6,7 +6,7 @@
 let extension = {
     name: "Codex",
     description: "Codex connected to Hex and run from the Agents panel, finding code through Hex's index instead of rg and whole files.",
-    version: "1.4.0",
+    version: "1.5.0",
     author: "bogz",
     settings: {
         budget: { title: "Answer size", about: "The most characters a harness answer is for Codex when it doesn't say, about four to a token.", kind: "number", least: 1000, most: 60000, step: 1000, default: 6000 },
@@ -102,6 +102,12 @@ func arguments_for(hex, chat) {
         "-c", "mcp_servers.hex.tool_timeout_sec=660",
         "-c", "mcp_servers.hex.enabled=true",
         "-c", "mcp_servers.hex.default_tools_approval_mode=\"approve\""];
+    // The harness said as developer instructions, where it weighs more than the server's, so finding and reading code
+    // goes through Hex first and the shell is for the rest. A TOML literal string, the rules have no quotes to escape
+    if (hex.harness_rules != null) {
+        arguments.push("-c");
+        arguments.push("developer_instructions='''" + hex.harness_rules + "'''");
+    }
     let model = option(hex, chat, "model").trim();
     if (len(model) > 0) {
         arguments.push("--model");
