@@ -6,7 +6,7 @@
 let extension = {
     name: "Codex",
     description: "Codex connected to Hex and run from the Agents panel, finding code through Hex's index instead of rg and whole files.",
-    version: "1.5.0",
+    version: "1.6.0",
     author: "bogz",
     settings: {
         budget: { title: "Answer size", about: "The most characters a harness answer is for Codex when it doesn't say, about four to a token.", kind: "number", least: 1000, most: 60000, step: 1000, default: 6000 },
@@ -24,6 +24,9 @@ let instructions = "Find code through Hex before rg or reading whole files. hex_
 
 // What the Agents panel offers over its box for Codex, each kept in the setting of its id. The models and efforts are the
 // ones codex has cached for itself when that file is there, a fixed list of current ones when it isn't
+// How much context each of the models codex has cached has, by its slug, for the Agents panel's details
+let windows = {};
+
 func options_for(hex) {
     let models = [{ value: "", label: "Default model" }];
     let efforts = [{ value: "", label: "Default effort" }];
@@ -36,6 +39,7 @@ func options_for(hex) {
         for (model in cached?.models ?? []) {
             if (model.visibility != "list") continue;
             models.push({ value: model.slug, label: model.display_name ?? model.slug });
+            windows[model.slug] = model.context_window ?? 0;
             for (level in model.supported_reasoning_levels ?? []) seen.push(level.effort);
         }
     }
@@ -140,7 +144,7 @@ func heard(chat, event) {
     else if (event.type == "item.completed" && item != null) completed(chat, item);
     else if (event.type == "turn.completed") {
         let used = event.usage ?? {};
-        chat.usage({ input: used.input_tokens ?? 0, output: used.output_tokens ?? 0 });
+        chat.usage({ input: used.input_tokens ?? 0, output: used.output_tokens ?? 0, cache_read: used.cached_input_tokens ?? 0, context_limit: windows[chat.option("model") ?? ""] ?? 0 });
         chat.done();
     }
     else if (event.type == "turn.failed") {

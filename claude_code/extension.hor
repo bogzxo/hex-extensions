@@ -6,7 +6,7 @@
 let extension = {
     name: "Claude Code",
     description: "Claude Code connected to Hex, finding code through Hex's index instead of grep and whole files.",
-    version: "1.6.0",
+    version: "1.7.0",
     author: "bogz",
     settings: {
         budget: { title: "Answer size", about: "The most characters a harness answer is for Claude Code when it doesn't say, about four to a token.", kind: "number", least: 1000, most: 60000, step: 1000, default: 8000 },
@@ -143,6 +143,10 @@ func heard(chat, event) {
         return;
     }
     if (event.type == "assistant") {
+        // What it was reading as it said this, all of its context as of this call
+        let call = event.message?.usage;
+        if (call != null)
+            chat.usage({ context: (call.input_tokens ?? 0) + (call.cache_read_input_tokens ?? 0) + (call.cache_creation_input_tokens ?? 0) });
         for (part in event.message?.content ?? []) {
             if (part.type == "text") chat.text(part.text);
             else if (part.type == "thinking") chat.thinking(part.thinking);
@@ -164,10 +168,22 @@ func heard(chat, event) {
     if (event.type == "result") {
         chat.session(event.session_id);
         let used = event.usage ?? {};
-        chat.usage({ input: (used.input_tokens ?? 0) + (used.cache_read_input_tokens ?? 0) + (used.cache_creation_input_tokens ?? 0), output: used.output_tokens ?? 0, cost: event.total_cost_usd ?? 0 });
+        chat.usage({ input: (used.input_tokens ?? 0) + (used.cache_read_input_tokens ?? 0) + (used.cache_creation_input_tokens ?? 0), output: used.output_tokens ?? 0, cost: event.total_cost_usd ?? 0,
+            cache_read: used.cache_read_input_tokens ?? 0, context_limit: window_of(event.modelUsage) });
         if (event.is_error) chat.error(event.result ?? event.subtype);
         chat.done();
     }
+}
+
+// How much context the models of a turn have, the most of them, 0 when it didn't say
+func window_of(models) {
+    let most = 0;
+    if (models == null) return most;
+    for (name in keys(models)) {
+        let window = models[name]?.contextWindow ?? 0;
+        if (window > most) most = window;
+    }
+    return most;
 }
 
 // A subagent's tool call said short, its name without the mcp__server__ in front and the part of what it was given
