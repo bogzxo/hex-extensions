@@ -6,7 +6,7 @@
 let extension = {
     name: "Claude Code",
     description: "Claude Code connected to Hex, finding code through Hex's index instead of grep and whole files.",
-    version: "1.9.0",
+    version: "1.10.0",
     author: "bogz",
     settings: {
         budget: { title: "Answer size", about: "The most characters a harness answer is for Claude Code when it doesn't say, about four to a token.", kind: "number", least: 1000, most: 60000, step: 1000, default: 8000 },
@@ -88,11 +88,13 @@ func say_who(hex) {
 // what's asked while it works goes in too. It says back every message it takes in, so the panel knows it was. The hex
 // server in a config file of the chat's own, so nothing of the folder's .mcp.json is needed and chats running at once
 // don't write over each other's (the server told which chat it is, for the agents it starts), and the session it was in
-// so the chat goes on. What the chat was started with (an agent starting another with a model) over the settings
+// so the chat goes on. What the chat was started with (an agent starting another with a model) over the settings. A tool
+// its permission mode would ask about comes back on its stdout as a control request, asked of the person in the chat,
+// rather than refused because nobody is at its own prompt
 func arguments_for(hex, chat) {
     let config = hex.temp + "/claude-mcp-" + chat.id + ".json";
     hex.json_set(config, ["mcpServers", "hex"], hex.mcp_server(chat));
-    let arguments = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--replay-user-messages", "--verbose", "--mcp-config", config, "--permission-mode", option(hex, chat, "permission_mode")];
+    let arguments = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--replay-user-messages", "--verbose", "--mcp-config", config, "--permission-mode", option(hex, chat, "permission_mode"), "--permission-prompt-tool", "stdio"];
     // The harness said in the system prompt, where it weighs more than the server's instructions, so finding and
     // reading code goes through Hex first. The shell is still there for what the harness doesn't do
     if (hex.harness_rules != null) {
@@ -161,6 +163,37 @@ func option(hex, chat, id) {
     return chat.option(id) ?? hex.setting(id);
 }
 
+// What takes back each question still waiting for the person, by the request it answers
+let leave_asked = {};
+
+// A tool asked leave for, answered on claude's stdin as control_response
+func asked_leave(chat, id, request) {
+    let tool = request.tool_name ?? "tool";
+    let input = request.input ?? {};
+    if ((tool == "Bash" || tool == "PowerShell") && hex_of.hex?.harness_check != null) {
+        let instead = hex_of.hex.harness_check(input.command ?? "");
+        if (instead != null) {
+            if (chat.note != null) chat.note("$(shield) Turned back to Hex's tools: " + (input.command ?? "") + ", " + instead);
+            leave_given(chat, id, input, false, "This reads the workspace the long way, use " + instead + ".");
+            return;
+        }
+    }
+    // A Hex with no cards to ask on lets it through, as it did before it was asked at all
+    if (chat.approval == null) {
+        leave_given(chat, id, input, true, null);
+        return;
+    }
+    let detail = input.command ?? input.file_path ?? input.description ?? "";
+    leave_asked[id] = chat.approval((request.display_name ?? tool) + " wants to run", detail, allowed => leave_given(chat, id, input, allowed, "The person said no."));
+}
+
+// The answer to a tool asked leave for, written on claude's stdin and the question forgotten
+func leave_given(chat, id, input, allowed, message) {
+    let said = allowed ? { behavior: "allow", updatedInput: input } : { behavior: "deny", message: message };
+    chat.write({ type: "control_response", response: { subtype: "success", request_id: id, response: said } });
+    leave_asked[id] = null;
+}
+
 // A message for claude's stdin, what somebody asked as a user's turn of stream-json, with the pictures pasted into it
 // in front as image blocks so it sees them as it reads the words. A Hex without chat.images has none to give
 func message_of(text, chat) {
@@ -174,6 +207,17 @@ func message_of(text, chat) {
 
 // A line of claude's stream-json, what it says on the panel's rows
 func heard(chat, event) {
+    // It asks leave for a tool nothing else has said yes or no to. A read of the workspace by the shell is turned back at
+    // once with the Hex tool for it, anything else asked of the person in the chat, the answer written back on its stdin
+    if (event.type == "control_request" && event.request?.subtype == "can_use_tool") {
+        asked_leave(chat, event.request_id, event.request);
+        return;
+    }
+    if (event.type == "control_cancel_request") {
+        let withdraw = leave_asked[event.request_id];
+        if (withdraw != null) withdraw();
+        return;
+    }
     // What a subagent of its own does comes with the id of the Task that started it, and goes on that Task's row as a
     // step rather than rows of its own among the chat's
     let parent = event.parent_tool_use_id;
