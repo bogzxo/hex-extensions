@@ -6,7 +6,7 @@
 let extension = {
     name: "Claude Code",
     description: "Claude Code connected to Hex, finding code through Hex's index instead of grep and whole files.",
-    version: "1.7.0",
+    version: "1.8.0",
     author: "bogz",
     settings: {
         budget: { title: "Answer size", about: "The most characters a harness answer is for Claude Code when it doesn't say, about four to a token.", kind: "number", least: 1000, most: 60000, step: 1000, default: 8000 },
@@ -16,6 +16,10 @@ let extension = {
         permission_mode: { title: "Permissions", about: "What it may do without asking, since nobody's there to be asked in the panel.", kind: "choice",
             choices: ["acceptEdits", "default", "plan", "bypassPermissions"], labels: ["Edits accepted", "Ask (refused)", "Plan only", "Anything"],
             help: ["Changes files, runs only what's allowed.", "Anything that would ask is refused.", "Reads and plans, changes nothing.", "Runs anything at all, careful."], default: "acceptEdits" },
+        effort: { title: "Effort", about: "How hard it thinks, its own default when empty.", kind: "choice",
+            choices: ["", "low", "medium", "high", "xhigh", "max"], labels: ["Default", "Low", "Medium", "High", "Extra high", "Max"], default: "" },
+        fallback_model: { title: "Fallback model", about: "The model it falls back on while the one asked for is overloaded, a comma between several, none when empty.", kind: "text", default: "" },
+        max_budget: { title: "Budget a turn", about: "The most dollars a turn may spend before it stops, no limit at 0.", kind: "number", least: 0, most: 1000, step: 1, default: 0 },
         allowed_tools: { title: "Allowed tools", about: "Tools it may use without asking, a space between them. Hex's are mcp__hex.", kind: "text", default: "mcp__hex Read Grep Glob" }
     }
 };
@@ -28,6 +32,9 @@ let options = [
     { id: "model", title: "Model", icon: "sparkle", choices: [
         { value: "", label: "Default model" }, { value: "opus", label: "Opus" }, { value: "sonnet", label: "Sonnet" }, { value: "haiku", label: "Haiku" },
         { value: "claude-fable-5-2", label: "Fable" }] },
+    { id: "effort", title: "Effort", icon: "lightbulb", choices: [
+        { value: "", label: "Default effort" }, { value: "low", label: "Low" }, { value: "medium", label: "Medium" }, { value: "high", label: "High" },
+        { value: "xhigh", label: "Extra high" }, { value: "max", label: "Max" }] },
     { id: "permission_mode", title: "Permissions", icon: "shield", choices: [
         { value: "acceptEdits", label: "Edits allowed" }, { value: "default", label: "Ask first" }, { value: "plan", label: "Plan only" }, { value: "bypassPermissions", label: "Anything" }] }
 ];
@@ -105,6 +112,22 @@ func arguments_for(hex, chat) {
         arguments.push("--model");
         arguments.push(model);
     }
+    let effort = option(hex, chat, "effort") ?? "";
+    if (len(effort) > 0) {
+        arguments.push("--effort");
+        arguments.push(effort);
+    }
+    let fallback = (hex.setting("fallback_model") ?? "").trim();
+    if (len(fallback) > 0) {
+        arguments.push("--fallback-model");
+        arguments.push(fallback);
+    }
+    // A setting kept as text by an older Hex reads as a number either way
+    let budget = number(hex.setting("max_budget") ?? 0) ?? 0;
+    if (typeof(budget) == "number" && budget > 0) {
+        arguments.push("--max-budget-usd");
+        arguments.push("" + budget);
+    }
     let session = chat.session();
     if (session != null) {
         arguments.push("--resume");
@@ -142,6 +165,28 @@ func heard(chat, event) {
         chat.usage({ model: event.model });
         return;
     }
+    // Its context summed up to make room, by itself as it filled or because it was asked to with /compact. The
+    // tokens it held before and after, after only from versions that say it
+    if (event.type == "system" && event.subtype == "compact_boundary") {
+        let compact = event.compact_metadata ?? {};
+        if (chat.compacted != null) chat.compacted({ trigger: compact.trigger ?? "auto", before: compact.pre_tokens ?? 0, after: compact.post_tokens ?? 0 });
+        else chat.note("context compacted");
+        return;
+    }
+    // A call that failed and is tried again, overloaded, rate limited or a server error, with the wait before the next
+    if (event.type == "system" && event.subtype == "api_retry") {
+        let why = event.error ?? "";
+        if (event.error_status != null) why = why + " (" + event.error_status + ")";
+        if (chat.retry != null) chat.retry({ attempt: event.attempt ?? 1, most: event.max_retries ?? 0, delay: (event.retry_delay_ms ?? 0) / 1000, why: why.replace("_", " ") });
+        return;
+    }
+    if (event.type == "system") return;
+    // Where it stands against the plan's limits, said once a turn. The window that's binding when it's warned or
+    // refused, the fullest of them otherwise, since that's the one that runs out first
+    if (event.type == "rate_limit_event") {
+        if (chat.limit != null) chat.limit(limit_of(event.rate_limit_info ?? {}));
+        return;
+    }
     if (event.type == "assistant") {
         // What it was reading as it said this, all of its context as of this call
         let call = event.message?.usage;
@@ -150,6 +195,11 @@ func heard(chat, event) {
         for (part in event.message?.content ?? []) {
             if (part.type == "text") chat.text(part.text);
             else if (part.type == "thinking") chat.thinking(part.thinking);
+            else if (part.type == "tool_use" && part.name == "TodoWrite") {
+                // Its to-do list as a checklist row, as Codex's is, rather than a tool row of JSON
+                todos[part.id] = true;
+                chat.note((part.input?.todos ?? []).map(todo => mark_of(todo.status) + todo.content).join("\n"));
+            }
             else if (part.type == "tool_use") chat.tool(part.id, part.name, part.input);
         }
         return;
@@ -157,10 +207,12 @@ func heard(chat, event) {
     if (event.type == "user") {
         // A message said back is one it took in, the first it was started with and every one asked as it worked
         if (event.isReplay ?? false) {
-            chat.taken();
+            // What a slash command printed comes back the same way, and wasn't asked as it worked
+            if (!said_by_command(event.message?.content)) chat.taken();
             return;
         }
         for (part in event.message?.content ?? []) {
+            if (part.type == "tool_result" && todos[part.tool_use_id] != null) continue;
             if (part.type == "tool_result") chat.tool_done(part.tool_use_id, !(part.is_error ?? false), text_of(part.content));
         }
         return;
@@ -173,6 +225,49 @@ func heard(chat, event) {
         if (event.is_error) chat.error(event.result ?? event.subtype);
         chat.done();
     }
+}
+
+// The to-do lists it wrote, by the id of the call, whose results say nothing worth a row
+let todos = {};
+
+// A to-do's box by how far it's got
+func mark_of(status) {
+    if (status == "completed") return "[x] ";
+    if (status == "in_progress") return "[~] ";
+    return "[ ] ";
+}
+
+// Whether a message said back is what a slash command printed rather than something asked
+func said_by_command(content) {
+    let text = typeof(content) == "text" ? content : (content ?? []).map(part => part?.text ?? "").join("");
+    return text.contains("<local-command-stdout>") || text.contains("<local-command-stderr>");
+}
+
+// The limit a rate_limit_event says, in the words of chat.limit. The binding window when it's not all clear, the
+// fullest of its windows when it is
+func limit_of(info) {
+    let kind = info.rateLimitType ?? "";
+    let used = info.utilization ?? -1;
+    let resets = info.resetsAt ?? 0;
+    let windows = info.unifiedWindows;
+    if (windows != null) {
+        if ((info.status ?? "allowed") != "allowed" && windows[kind] != null) {
+            used = windows[kind].utilization ?? used;
+            resets = windows[kind].resetsAt ?? resets;
+        } else {
+            for (name in keys(windows)) {
+                let window = windows[name];
+                if ((window?.utilization ?? -1) > used) {
+                    kind = name;
+                    used = window.utilization;
+                    resets = window.resetsAt ?? resets;
+                }
+            }
+        }
+    }
+    let message = null;
+    if (info.status == "rejected") message = "Claude Code waits for the limit to reset, or uses extra usage when it's on.";
+    return { kind: kind, status: info.status ?? "allowed", used: used, resets: resets, message: message };
 }
 
 // How much context the models of a turn have, the most of them, 0 when it didn't say

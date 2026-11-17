@@ -6,7 +6,7 @@
 let extension = {
     name: "Codex",
     description: "Codex connected to Hex and run from the Agents panel, finding code through Hex's index instead of rg and whole files.",
-    version: "1.6.0",
+    version: "1.7.0",
     author: "bogz",
     settings: {
         budget: { title: "Answer size", about: "The most characters a harness answer is for Codex when it doesn't say, about four to a token.", kind: "number", least: 1000, most: 60000, step: 1000, default: 6000 },
@@ -61,7 +61,11 @@ let teach_start = "<!-- hex tools -->";
 let teach_end = "<!-- /hex tools -->";
 let teaching = "## Finding code\n\nThis folder is open in Hex, which Codex reaches as the `hex` MCP server. Use its tools before rg or reading whole files.\n\n- `hex_map`, `hex_files` for the layout, `hex_symbols` for declarations, `hex_refs` for uses\n- `hex_search` text or a regex, ranked and grouped by file\n- `hex_skim` what files are, `hex_read` with a symbol for one method or class\n- `hex_terminal_run` to run a command and wait, `hex_changes` for what moved since an answer\n";
 
+// The hex object kept for the run's callbacks, which are only handed the chat and the line
+let hex_of = { hex: null };
+
 func on_start(hex) {
+    hex_of.hex = hex;
     if (hex.agent == null) {
         hex.say("needs a Hex with the agent harness (hex.agent)");
         return;
@@ -139,20 +143,119 @@ func option(hex, chat, id) {
 // A line of codex exec --json, what it says on the panel's rows
 func heard(chat, event) {
     let item = event.item;
-    if (event.type == "thread.started") chat.session(event.thread_id);
+    if (event.type == "thread.started") {
+        chat.session(event.thread_id);
+        begin_log(chat, event.thread_id);
+    }
     else if (event.type == "item.started" && item != null) started(chat, item);
-    else if (event.type == "item.completed" && item != null) completed(chat, item);
+    else if (event.type == "item.completed" && item != null) {
+        completed(chat, item);
+        read_log(chat);
+    }
     else if (event.type == "turn.completed") {
+        read_log(chat);
         let used = event.usage ?? {};
         chat.usage({ input: used.input_tokens ?? 0, output: used.output_tokens ?? 0, cache_read: used.cached_input_tokens ?? 0, context_limit: windows[chat.option("model") ?? ""] ?? 0 });
         chat.done();
     }
     else if (event.type == "turn.failed") {
-        chat.error(event.error?.message ?? "the turn failed");
+        read_log(chat);
+        let message = event.error?.message ?? "the turn failed";
+        if (!limit_said(chat, message)) chat.error(message);
         chat.done();
     }
-    // Warnings come as errors too, a turn that fails says so with turn.failed
-    else if (event.type == "error") chat.note(event.message ?? "something went wrong");
+    // Warnings come as errors too, a turn that fails says so with turn.failed. A dropped stream it tries again says
+    // Reconnecting with the try and how many it makes, a retry rather than something wrong
+    else if (event.type == "error") {
+        let message = event.message ?? "something went wrong";
+        if (!retry_said(chat, message) && !limit_said(chat, message)) chat.note(message);
+    }
+}
+
+// What codex exec --json leaves out (where it stands against its limits, its context compacted, how big its window
+// is) is in the session file it writes for every thread, ~/.codex/sessions/.../rollout-...-<thread>.jsonl. Each chat
+// reads on from where it got to, so a turn costs only the lines it added
+let logs = {};
+
+// A thread resumed has a session file already, with the compactions and limits of turns said before, so this turn's
+// reading starts at its end. A new thread's file is written as it goes, read from its start
+func begin_log(chat, thread) {
+    if (hex_of.hex == null || hex_of.hex.find_file == null) return;
+    let file = hex_of.hex.find_file(hex_of.hex.home + "/.codex/sessions", thread + ".jsonl");
+    logs[chat.id] = { thread: thread, file: file, at: file == null ? 0 : hex_of.hex.read_lines(file, -1).end, context: 0, compacting: -1, tries: 0 };
+}
+
+func read_log(chat) {
+    let thread = chat.session();
+    if (thread == null || chat.limit == null || hex_of.hex == null || hex_of.hex.read_lines == null) return;
+    let log = logs[chat.id];
+    if (log == null || log.thread != thread) {
+        log = { thread: thread, file: null, at: 0, context: 0, compacting: -1, tries: 0 };
+        logs[chat.id] = log;
+    }
+    if (log.file == null) {
+        // Looked for a few times only, a thread whose file isn't where it's expected costs nothing after that
+        if (log.tries > 3) return;
+        log.tries = log.tries + 1;
+        log.file = hex_of.hex.find_file(hex_of.hex.home + "/.codex/sessions", thread + ".jsonl");
+        if (log.file == null) return;
+    }
+    let read = hex_of.hex.read_lines(log.file, log.at);
+    log.at = read.end;
+    for (line in read.lines) {
+        // Only the kinds of line wanted are parsed, the rest of the file is the whole conversation
+        if (line.contains("\"token_count\"")) counted(chat, log, hex_of.hex.json_parse(line)?.payload);
+        else if (line.index_of("\"type\":\"compacted\"") >= 0 && line.index_of("\"type\":\"compacted\"") < 120) log.compacting = log.context;
+    }
+}
+
+// A token_count of the session file, how full the context is, how big the window is and where the limits stand
+func counted(chat, log, payload) {
+    if (payload == null) return;
+    let info = payload.info;
+    let context = info?.last_token_usage?.input_tokens ?? 0;
+    if (context > 0) {
+        if (log.compacting >= 0) {
+            chat.compacted({ trigger: "auto", before: log.compacting, after: context });
+            log.compacting = -1;
+        }
+        log.context = context;
+        chat.usage({ context: context, context_limit: info?.model_context_window ?? 0 });
+    }
+    let limits = payload.rate_limits;
+    if (limits != null) chat.limit(limit_of(limits));
+}
+
+// The fuller of the two windows Codex keeps, the five hour one and the weekly one, as chat.limit says it. Codex says
+// no warning of its own, so one goes up past nine tenths
+func limit_of(limits) {
+    let window = limits.primary;
+    if (limits.secondary != null && (window == null || (limits.secondary.used_percent ?? 0) > (window.used_percent ?? 0))) window = limits.secondary;
+    let used = (window?.used_percent ?? -100) / 100;
+    let minutes = window?.window_minutes ?? 0;
+    let kind = minutes >= 10000 ? "seven_day" : minutes == 300 ? "five_hour" : "usage";
+    let status = limits.rate_limit_reached_type != null ? "rejected" : used >= 0.9 ? "allowed_warning" : "allowed";
+    return { kind: kind, status: status, used: used, resets: window?.resets_at ?? 0 };
+}
+
+// Reconnecting... 2/5 said as a retry, true when it was one
+func retry_said(chat, message) {
+    if (chat.retry == null || !message.starts_with("Reconnecting")) return false;
+    let tries = message.split(" ");
+    let counts = tries[len(tries) - 1].split("/");
+    let attempt = len(counts) == 2 ? number(counts[0]) ?? 1 : 1;
+    let most = len(counts) == 2 ? number(counts[1].split(" ")[0]) ?? 0 : 0;
+    chat.retry({ attempt: attempt, most: most, why: "stream dropped" });
+    return true;
+}
+
+// A usage limit hit said as the limit it is, the time it resets as Codex says it in its words, true when it was one
+func limit_said(chat, message) {
+    if (chat.limit == null) return false;
+    let low = message.lower();
+    if (!low.contains("usage limit") && !low.contains("rate limit") && !low.contains("quota")) return false;
+    chat.limit({ kind: low.contains("rate limit") ? "rate" : "usage", status: "rejected", message: message });
+    return true;
 }
 
 // An item that takes a while, a row that's running until it's completed
