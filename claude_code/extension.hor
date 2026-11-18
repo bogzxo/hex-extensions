@@ -56,6 +56,11 @@ func on_start(hex) {
         hex.say("needs a Hex with the agent harness (hex.agent)");
         return;
     }
+    // The models it said the last time, so the picker has them from the start rather than once a run has asked
+    if (hex.exists(models_file(hex))) {
+        let kept = hex.json_parse(hex.read(models_file(hex)))?.models ?? [];
+        if (len(kept) > 0) discovered.models = kept;
+    }
     say_who(hex);
     hex.command("Connect Claude Code to this folder", hex => connect(hex));
     hex.command("Teach Claude Code the Hex tools", hex => teach(hex));
@@ -303,10 +308,17 @@ func introduced(chat, said) {
     let key = models.map(each => each.value + "=" + each.label).join("|") + "#" + commands.map(each => each.name).join("|");
     if ((len(models) == 0 && len(commands) == 0) || key == discovered.said) return;
     discovered.commands = commands;
-    if (len(models) > 0) discovered.models = models;
+    if (len(models) > 0) {
+        discovered.models = models;
+        // Kept for the next start, Claude Code's own list of the models the account may use, never written here by hand
+        if (hex_of.hex != null) hex_of.hex.json_set(models_file(hex_of.hex), ["models"], models);
+    }
     discovered.said = key;
     if (hex_of.hex != null) say_who(hex_of.hex);
 }
+
+// Where the models it said last are kept, in Hex's temp folder beside its context windows
+func models_file(hex) { return hex.temp + "/claude-models.json"; }
 
 // The options with the models it said in place of those written here, once it's said them
 func options_now() {

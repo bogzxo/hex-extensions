@@ -7,7 +7,7 @@
 let extension = {
     name: "Antigravity",
     description: "Google's Antigravity CLI (agy) run from the Agents panel on your Google subscription, connected to Hex and finding code through its index.",
-    version: "1.1.0",
+    version: "1.2.0",
     author: "bogz",
     settings: {
         budget: { title: "Answer size", about: "The most characters a harness answer is for Antigravity when it doesn't say, about four to a token.", kind: "number", least: 1000, most: 60000, step: 1000, default: 6000 },
@@ -23,8 +23,8 @@ let extension = {
 // What it's told as it connects, after what Hex tells every agent
 let instructions = "Find code through Hex before grep_search, find_by_name or view_file of whole files. hex_map once to see the workspace, hex_symbols for where something is declared, hex_search for text (ranked, grouped by file), hex_refs for where a name is used, hex_skim for what files are, hex_read with a symbol to read one method or class instead of the file. Every answer is path:line and ends with the index generation, hex_changes says what moved since. hex_terminal_run runs a command and waits for it.";
 
-// What the Agents panel offers over its box, each kept in the setting of its id. The models are agy models' list of the
-// day, the effort of a Gemini in its name
+// What the Agents panel offers over its box, each kept in the setting of its id. The models here are agy models' list
+// when this was written, there only until agy says its own as Hex starts (ask_models), the effort of a Gemini in its name
 let options = [
     { id: "model", title: "Model", icon: "sparkle", choices: [
         { value: "", label: "Default model" },
@@ -46,10 +46,56 @@ func on_start(hex) {
         return;
     }
     say_who(hex);
+    ask_models(hex);
     hex.command("Connect Antigravity to this folder", hex => connect(hex));
 }
 
-func on_setting(hex, name, value) { say_who(hex); }
+func on_setting(hex, name, value) {
+    say_who(hex);
+    if (name == "program") ask_models(hex);
+}
+
+// The models the account may use as agy says them (agy models, an id and its name a line), so the picker has every
+// model there is today without this extension being brought up to date for each. The list written here stays until it
+// answers, and when it can't (an older Hex, agy not there or signed out)
+let listed = [];
+
+func ask_models(hex) {
+    if (hex.program_output == null) return;
+    hex.program_output(hex.setting("program"), ["models"], (hex, said) => {
+        let found = models_of(said);
+        if (len(found) == 0) return;
+        listed = found;
+        say_who(hex);
+    });
+}
+
+// The models out of what agy models printed, its id then its name on a line, the lines that aren't one left out
+func models_of(said) {
+    let found = [];
+    if (said == null) return found;
+    for (line in said.split("\n")) {
+        let text = line.trim();
+        let space = text.index_of(" ");
+        if (space <= 0) continue;
+        let id = text.substring(0, space);
+        let name = text.substring(space).trim();
+        // A model's id is its slug, lower case with dashes and dots, never the words agy says while it fetches
+        if (len(name) == 0 || id != id.lower() || id.contains("...") || !id.contains("-")) continue;
+        found.push({ value: id, label: name });
+    }
+    return found;
+}
+
+// The options with the models agy said in place of those written here, once it's said them
+func options_now() {
+    if (len(listed) == 0) return options;
+    let choices = [{ value: "", label: "Default model" }];
+    for (each in listed) choices.push(each);
+    let now = [{ id: "model", title: "Model", icon: "sparkle", choices: choices }];
+    for (each in options) if (each.id != "model") now.push(each);
+    return now;
+}
 
 // Tells the harness who Antigravity is and how to run it, again whenever its settings change
 func say_who(hex) {
@@ -67,7 +113,7 @@ func say_who(hex) {
             icon: "rocket",
             install: "Install it with winget install Google.AntigravityCLI, then run agy once in a terminal to sign in, or say where it is in Antigravity's settings.",
             stdin: true,
-            options: options,
+            options: options_now(),
             arguments: (prompt, chat) => arguments_for(hex, chat),
             message: (text, chat) => message_of(text),
             on_event: (chat, event) => heard(hex, chat, event)
