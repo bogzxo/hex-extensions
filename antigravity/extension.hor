@@ -1,0 +1,233 @@
+// Antigravity as an agent system of Hex's, on the Google account its CLI is signed in with (AI Pro, Ultra and the rest),
+// where Gemini CLI now takes an API key alone. From the Agents panel it runs agy with stream-json both ways, what's asked
+// a user line on its stdin and every step it takes a line on its stdout, read into the panel's rows. A message asked as
+// it works goes in as the next turn, which agy queues. agy takes its MCP servers from the folder's .agents/mcp_config.json,
+// so the hex server is written there before each run, the rest of that file kept. Signing in is agy's own, run agy once
+// in a terminal.
+let extension = {
+    name: "Antigravity",
+    description: "Google's Antigravity CLI (agy) run from the Agents panel on your Google subscription, connected to Hex and finding code through its index.",
+    version: "1.0.0",
+    author: "bogz",
+    settings: {
+        budget: { title: "Answer size", about: "The most characters a harness answer is for Antigravity when it doesn't say, about four to a token.", kind: "number", least: 1000, most: 60000, step: 1000, default: 6000 },
+        server: { title: "Server name", about: "What the server is called in .agents/mcp_config.json.", kind: "text", default: "hex" },
+        program: { title: "Program", about: "The agy Hex runs from the Agents panel, a name on PATH or a whole path.", kind: "text", default: "agy" },
+        model: { title: "Model", about: "The model it asks for, as agy models lists them, its own default when empty.", kind: "text", default: "" },
+        mode: { title: "Approvals", about: "What it may do without asking, nobody being there to be asked in the panel. What it isn't let do it's told it can't, and goes on.", kind: "choice",
+            choices: ["accept-edits", "plan", "auto", "anything"], labels: ["Edits accepted", "Plan only", "Auto (sandboxed)", "Anything"],
+            help: ["Changes files, the rest refused.", "Reads and plans, changes nothing.", "Runs what it judges safe in agy's sandbox.", "Runs anything at all, careful."], default: "accept-edits" }
+    }
+};
+
+// What it's told as it connects, after what Hex tells every agent
+let instructions = "Find code through Hex before grep_search, find_by_name or view_file of whole files. hex_map once to see the workspace, hex_symbols for where something is declared, hex_search for text (ranked, grouped by file), hex_refs for where a name is used, hex_skim for what files are, hex_read with a symbol to read one method or class instead of the file. Every answer is path:line and ends with the index generation, hex_changes says what moved since. hex_terminal_run runs a command and waits for it.";
+
+// What the Agents panel offers over its box, each kept in the setting of its id. The models are agy models' list of the
+// day, the effort of a Gemini in its name
+let options = [
+    { id: "model", title: "Model", icon: "sparkle", choices: [
+        { value: "", label: "Default model" },
+        { value: "gemini-3.8-flash-high", label: "Gemini 3.8 Flash (High)" }, { value: "gemini-3.8-flash-medium", label: "Gemini 3.8 Flash (Medium)" },
+        { value: "gemini-3.8-flash-low", label: "Gemini 3.8 Flash (Low)" }, { value: "claude-opus-4-6-thinking", label: "Claude Opus 4.6 (Thinking)" },
+        { value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6 (Thinking)" }, { value: "gpt-oss-120b-medium", label: "GPT-OSS 120B (Medium)" }] },
+    { id: "mode", title: "Approvals", icon: "shield", choices: [
+        { value: "accept-edits", label: "Edits allowed" }, { value: "plan", label: "Plan only" }, { value: "auto", label: "Auto (sandboxed)" }, { value: "anything", label: "Anything" }] }
+];
+
+// The text a chat has been streamed so far and the model it runs, by chat id. agy says its answer in fragments, which
+// are one row here
+let pending = {};
+let models = {};
+
+func on_start(hex) {
+    if (hex.agent == null) {
+        hex.say("needs a Hex with the agent harness (hex.agent)");
+        return;
+    }
+    say_who(hex);
+    hex.command("Connect Antigravity to this folder", hex => connect(hex));
+}
+
+func on_setting(hex, name, value) { say_who(hex); }
+
+// Tells the harness who Antigravity is and how to run it, again whenever its settings change
+func say_who(hex) {
+    hex.agent({
+        id: "antigravity",
+        name: "Antigravity",
+        clients: ["antigravity", "agy", "antigravity-cli"],
+        budget: hex.setting("budget"),
+        instructions: instructions,
+        run: {
+            program: hex.setting("program"),
+            icon: "rocket",
+            install: "Install it with winget install Google.AntigravityCLI, then run agy once in a terminal to sign in, or say where it is in Antigravity's settings.",
+            stdin: true,
+            options: options,
+            arguments: (prompt, chat) => arguments_for(hex, chat),
+            message: (text, chat) => message_of(text),
+            on_event: (chat, event) => heard(chat, event)
+        }
+    });
+}
+
+// What agy is run with for a run of turns. stream-json both ways, the prompt and anything asked after it a user line
+// each on stdin, so it's never given with -p. The hex server goes into the folder's .agents/mcp_config.json first, told
+// which chat it's for. The conversation is gone on with by its id so the chat goes on
+func arguments_for(hex, chat) {
+    let folders = hex.workspace();
+    if (len(folders) > 0) {
+        let server = hex.mcp_server(chat);
+        let why = hex.json_set(folders[0] + "/.agents/mcp_config.json", ["mcpServers", hex.setting("server")], { command: server.command, args: server.args });
+        if (why != null) chat.note("couldn't give Antigravity the hex server, " + why);
+    }
+    let arguments = ["--output-format", "stream-json", "--input-format", "stream-json"];
+    let mode = option(hex, chat, "mode");
+    if (mode == "anything") arguments.push("--dangerously-skip-permissions");
+    else {
+        arguments.push("--mode");
+        arguments.push(mode);
+    }
+    let model = option(hex, chat, "model").trim();
+    if (len(model) > 0) {
+        arguments.push("--model");
+        arguments.push(model);
+    }
+    let session = chat.session();
+    if (session != null) {
+        arguments.push("--conversation");
+        arguments.push(session);
+    }
+    return arguments;
+}
+
+// A user's turn as a line of agy's stream-json input
+func message_of(text) {
+    return { event: "user", message: { content: text } };
+}
+
+// An option of the chat's when it was started with one, the setting otherwise
+func option(hex, chat, id) {
+    return chat.option(id) ?? hex.setting(id);
+}
+
+// What the chat has streamed so far, said as one row
+func flush(chat) {
+    let said = pending[chat.id] ?? "";
+    pending[chat.id] = "";
+    if (len(said.trim()) > 0) chat.text(said);
+}
+
+// How much a model holds, Gemini's million and Claude's two hundred thousand, which agy doesn't say
+func window_of(model) {
+    let named = (model ?? "").lower();
+    if (named.contains("claude")) return 200000;
+    if (named.contains("gpt")) return 131072;
+    return 1048576;
+}
+
+// A line of agy's stream-json, what it says on the panel's rows. Each line is { event: kind, kind: what it says }
+func heard(chat, line) {
+    if (line.event == "init") {
+        if (line.conversation_id != null) chat.session(line.conversation_id);
+        models[chat.id] = line.init?.model;
+        if (line.init?.model != null) chat.usage({ model: line.init.model });
+    }
+    else if (line.event == "step_update") {
+        stepped(chat, line.step_update ?? {});
+    }
+    else if (line.event == "result") {
+        let result = line.result ?? {};
+        flush(chat);
+        if (result.conversation_id != null) chat.session(result.conversation_id);
+        if (result.status == "ERROR" || result.status == "INVALID") trouble(chat, said_of(result.error) ?? "the turn failed", true);
+        else if (result.status == "CANCELED" || result.status == "INTERRUPTED") chat.note("the turn was stopped");
+        chat.done();
+    }
+}
+
+// A step of the turn. What it was asked taken in, its answer in fragments, a tool going and then done by its step's number
+func stepped(chat, step) {
+    let kind = step.step_type;
+    if (kind == "user_input") {
+        if (step.state == "DONE") chat.taken();
+    }
+    else if (kind == "agent_response") {
+        if (step.text_delta != null) pending[chat.id] = (pending[chat.id] ?? "") + step.text_delta;
+        if (step.state == "DONE") {
+            flush(chat);
+            // A step's usage is the call it made, its input the context as it stood
+            let used = step.usage;
+            if (used != null)
+                chat.usage({ input: (used.input_tokens ?? 0) + (used.cache_read_tokens ?? 0), output: used.output_tokens ?? 0,
+                    cache_read: used.cache_read_tokens ?? 0, context_limit: window_of(models[chat.id]) });
+        }
+    }
+    else if (kind == "tool") {
+        let info = step.tool_info ?? {};
+        let id = "step-" + step.step_index;
+        let name = tool_name_of(info, step.tool_name);
+        if (step.state == "ACTIVE") {
+            flush(chat);
+            chat.tool(id, name, info.parameters ?? {});
+        }
+        else if (step.state == "DONE") {
+            // Said done without having been said going, the whole of it at once
+            chat.tool(id, name, info.parameters ?? {});
+            if (info.error != null) chat.tool_done(id, false, said_of(info.error) ?? "it failed");
+            else chat.tool_done(id, true, text_of(info.output));
+        }
+    }
+}
+
+// A tool's name as the panel shows it, an MCP call by the server and tool it went to (mcp__hex__hex_read) so Hex's own
+// tools look like Hex's own
+func tool_name_of(info, named) {
+    let name = info.name ?? named ?? "tool";
+    if (name == "call_mcp_tool") {
+        let p = info.parameters ?? {};
+        let server = p.ServerName ?? p.server_name ?? p.Server ?? "mcp";
+        let tool = p.ToolName ?? p.tool_name ?? p.Tool ?? "tool";
+        return "mcp__" + server + "__" + tool;
+    }
+    return name;
+}
+
+// What a tool said back, text as it is and anything else written out
+func text_of(output) {
+    if (output == null) return "";
+    return typeof(output) == "text" ? output : text(output);
+}
+
+// What an error says, its message or the text it is
+func said_of(error) {
+    if (error == null) return null;
+    if (typeof(error) == "text") return error;
+    return error.message ?? error.type ?? text(error);
+}
+
+// A failure of agy's. Quota and rate limits are the panel's limit, signing in is said how, the rest are errors or notes
+func trouble(chat, message, fatal) {
+    let lower = message.lower();
+    let limited = lower.contains("429") || lower.contains("resource_exhausted") || lower.contains("quota") || lower.contains("rate limit");
+    if (limited && chat.limit != null) chat.limit({ kind: "usage", status: "hit", message: message });
+    else if (lower.contains("authentication") || lower.contains("sign in") || lower.contains("login")) chat.error(message + " (run agy once in a terminal to sign in)");
+    else if (fatal) chat.error(message);
+    else chat.note(message);
+}
+
+// The hex server in the folder's .agents/mcp_config.json, the rest of the file left as it was
+func connect(hex) {
+    let folders = hex.workspace();
+    if (len(folders) == 0) {
+        hex.say("open a folder first, Antigravity is set up for a folder");
+        return;
+    }
+    let why = hex.json_set(folders[0] + "/.agents/mcp_config.json", ["mcpServers", hex.setting("server")], { command: hex.executable, args: ["--mcp"] });
+    if (why != null) {
+        hex.notify("couldn't write .agents/mcp_config.json, " + why, true);
+        return;
+    }
+    hex.notify("Antigravity started in " + folders[0] + " has Hex's tools now");
+}
