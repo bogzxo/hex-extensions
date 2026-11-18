@@ -7,7 +7,7 @@
 let extension = {
     name: "Antigravity",
     description: "Google's Antigravity CLI (agy) run from the Agents panel on your Google subscription, connected to Hex and finding code through its index.",
-    version: "1.2.0",
+    version: "1.2.1",
     author: "bogz",
     settings: {
         budget: { title: "Answer size", about: "The most characters a harness answer is for Antigravity when it doesn't say, about four to a token.", kind: "number", least: 1000, most: 60000, step: 1000, default: 6000 },
@@ -75,7 +75,8 @@ func models_of(said) {
     let found = [];
     if (said == null) return found;
     for (line in said.split("\n")) {
-        let text = line.trim();
+        // agy puts a tab between a model's id and its name
+        let text = line.replace("\t", " ").trim();
         let space = text.index_of(" ");
         if (space <= 0) continue;
         let id = text.substring(0, space);
@@ -235,17 +236,17 @@ func model_from_log(hex) {
     let read = hex.read_lines(hex.home + "/.gemini/antigravity-cli/cli.log", 0);
     let lines = read?.lines ?? [];
     let marker = "selected model override to backend: label=\"";
+    // Declared once, a let in the loop's body was the same name again on its second time round
     let i = len(lines) - 1;
-    while (i >= 0) {
-        let at = lines[i].index_of(marker);
-        if (at >= 0) {
-            let rest = lines[i].substring(at + len(marker));
-            let end = rest.index_of("\"");
-            return end > 0 ? rest.substring(0, end) : null;
-        }
-        i = i - 1;
+    let found = -1;
+    while (i >= 0 && found < 0) {
+        found = lines[i].index_of(marker);
+        if (found < 0) i = i - 1;
     }
-    return null;
+    if (found < 0) return null;
+    let rest = lines[i].substring(found + len(marker));
+    let end = rest.index_of("\"");
+    return end > 0 ? rest.substring(0, end) : null;
 }
 
 // A step of the turn. What it was asked taken in, its answer in fragments, a tool going and then done by its step's number
