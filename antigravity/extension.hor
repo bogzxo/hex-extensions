@@ -7,7 +7,7 @@
 let extension = {
     name: "Antigravity",
     description: "Google's Antigravity CLI (agy) run from the Agents panel on your Google subscription, connected to Hex and finding code through its index.",
-    version: "1.0.2",
+    version: "1.0.3",
     author: "bogz",
     settings: {
         budget: { title: "Answer size", about: "The most characters a harness answer is for Antigravity when it doesn't say, about four to a token.", kind: "number", least: 1000, most: 60000, step: 1000, default: 6000 },
@@ -120,9 +120,18 @@ func option(hex, chat, id) {
     return chat.option(id) ?? hex.setting(id);
 }
 
-// The rules of a kind (allow or deny) the agent that started this one gave it, a line each in the chat's option
+// The rules of a kind (allow or deny) the agent that started this one gave it, a line each in the chat's option. agy
+// checks a command run outside its sandbox, as Hex runs it, against unsandboxed(...) rules and one inside against
+// command(...), so a command rule is given for both
 func rules_of(chat, kind) {
-    return (chat.option(kind) ?? "").split("\n").map(rule => rule.trim()).filter(rule => len(rule) > 0);
+    let rules = [];
+    for (rule in (chat.option(kind) ?? "").split("\n")) {
+        let said = rule.trim();
+        if (len(said) == 0) continue;
+        rules.push(said);
+        if (said.starts_with("command(")) rules.push("unsandboxed(" + said.substring(len("command(")));
+    }
+    return rules;
 }
 
 // Text as a JSON string, for the settings written out by hand
