@@ -7,6 +7,7 @@ a newer version. An install is a copy of the folder into the `extensions` folder
 
 | Extension | What it does |
 | --- | --- |
+| `antigravity` | Antigravity's CLI (`agy`) on your Google plan, run from the Agents panel with Hex's tools through `.agents/mcp_config.json` |
 | `claude_code` | Claude Code connected to Hex, its answer size, `.mcp.json` and a CLAUDE.md block about the tools |
 | `codex` | Codex connected to Hex through `--mcp-connect`, its answer size and an AGENTS.md block |
 | `emmet` | HTML abbreviations written out on Tab or Ctrl+Alt+E, `ul>li.item$*3` and the rest of Emmet's shorthand |

@@ -7,7 +7,7 @@
 let extension = {
     name: "Antigravity",
     description: "Google's Antigravity CLI (agy) run from the Agents panel on your Google subscription, connected to Hex and finding code through its index.",
-    version: "1.0.0",
+    version: "1.0.1",
     author: "bogz",
     settings: {
         budget: { title: "Answer size", about: "The most characters a harness answer is for Antigravity when it doesn't say, about four to a token.", kind: "number", least: 1000, most: 60000, step: 1000, default: 6000 },
@@ -82,7 +82,10 @@ func arguments_for(hex, chat) {
         let why = hex.json_set(folders[0] + "/.agents/mcp_config.json", ["mcpServers", hex.setting("server")], { command: server.command, args: server.args });
         if (why != null) chat.note("couldn't give Antigravity the hex server, " + why);
     }
-    let arguments = ["--output-format", "stream-json", "--input-format", "stream-json"];
+    // Headless, agy refuses every MCP call it would have asked about, so the hex server's tools are allowed for this run
+    // alone through --settings, never saved into the person's own
+    let arguments = ["--output-format", "stream-json", "--input-format", "stream-json",
+        "--settings", "{\"permissions\":{\"allow\":[\"mcp(" + hex.setting("server") + "/*)\"]}}"];
     let mode = option(hex, chat, "mode");
     if (mode == "anything") arguments.push("--dangerously-skip-permissions");
     else {
@@ -143,6 +146,9 @@ func heard(chat, line) {
         if (result.conversation_id != null) chat.session(result.conversation_id);
         if (result.status == "ERROR" || result.status == "INVALID") trouble(chat, said_of(result.error) ?? "the turn failed", true);
         else if (result.status == "CANCELED" || result.status == "INTERRUPTED") chat.note("the turn was stopped");
+        // What it wasn't let do, headless having nobody to ask, so the person knows to widen Approvals for it
+        let denied = (result.denied_actions ?? []).map(action => action.display_name ?? action.action ?? "something");
+        if (len(denied) > 0) chat.note("Antigravity wasn't let do " + denied.join(", ") + ", Approvals in its options lets it");
         chat.done();
     }
 }
@@ -168,14 +174,16 @@ func stepped(chat, step) {
         let info = step.tool_info ?? {};
         let id = "step-" + step.step_index;
         let name = tool_name_of(info, step.tool_name);
+        // An MCP call's own arguments are what the row shows, not the server and tool they went to
+        let input = info.name == "call_mcp_tool" ? (info.parameters?.Arguments ?? {}) : (info.parameters ?? {});
         if (step.state == "ACTIVE") {
             flush(chat);
-            chat.tool(id, name, info.parameters ?? {});
+            chat.tool(id, name, input);
         }
-        else if (step.state == "DONE") {
-            // Said done without having been said going, the whole of it at once
-            chat.tool(id, name, info.parameters ?? {});
-            if (info.error != null) chat.tool_done(id, false, said_of(info.error) ?? "it failed");
+        else if (step.state == "DONE" || step.state == "ERROR") {
+            // Said done without having been said going, the whole of it at once. A refused one ends in ERROR
+            chat.tool(id, name, input);
+            if (info.error != null || step.state == "ERROR") chat.tool_done(id, false, said_of(info.error) ?? "it failed");
             else chat.tool_done(id, true, text_of(info.output));
         }
     }
