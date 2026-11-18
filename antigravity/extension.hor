@@ -7,7 +7,7 @@
 let extension = {
     name: "Antigravity",
     description: "Google's Antigravity CLI (agy) run from the Agents panel on your Google subscription, connected to Hex and finding code through its index.",
-    version: "1.0.1",
+    version: "1.0.2",
     author: "bogz",
     settings: {
         budget: { title: "Answer size", about: "The most characters a harness answer is for Antigravity when it doesn't say, about four to a token.", kind: "number", least: 1000, most: 60000, step: 1000, default: 6000 },
@@ -84,8 +84,13 @@ func arguments_for(hex, chat) {
     }
     // Headless, agy refuses every MCP call it would have asked about, so the hex server's tools are allowed for this run
     // alone through --settings, never saved into the person's own
-    let arguments = ["--output-format", "stream-json", "--input-format", "stream-json",
-        "--settings", "{\"permissions\":{\"allow\":[\"mcp(" + hex.setting("server") + "/*)\"]}}"];
+    // and with them the rules the agent that started this one gave it (hex_agent_spawn's permissions)
+    let allow = ["mcp(" + hex.setting("server") + "/*)"];
+    for (rule in rules_of(chat, "allow")) allow.push(rule);
+    let deny = rules_of(chat, "deny");
+    let permissions = "\"allow\":[" + allow.map(rule => quoted(rule)).join(",") + "]";
+    if (len(deny) > 0) permissions = permissions + ",\"deny\":[" + deny.map(rule => quoted(rule)).join(",") + "]";
+    let arguments = ["--output-format", "stream-json", "--input-format", "stream-json", "--settings", "{\"permissions\":{" + permissions + "}}"];
     let mode = option(hex, chat, "mode");
     if (mode == "anything") arguments.push("--dangerously-skip-permissions");
     else {
@@ -113,6 +118,16 @@ func message_of(text) {
 // An option of the chat's when it was started with one, the setting otherwise
 func option(hex, chat, id) {
     return chat.option(id) ?? hex.setting(id);
+}
+
+// The rules of a kind (allow or deny) the agent that started this one gave it, a line each in the chat's option
+func rules_of(chat, kind) {
+    return (chat.option(kind) ?? "").split("\n").map(rule => rule.trim()).filter(rule => len(rule) > 0);
+}
+
+// Text as a JSON string, for the settings written out by hand
+func quoted(text) {
+    return "\"" + text.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
 }
 
 // What the chat has streamed so far, said as one row

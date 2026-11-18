@@ -6,7 +6,7 @@
 let extension = {
     name: "Claude Code",
     description: "Claude Code connected to Hex, finding code through Hex's index instead of grep and whole files.",
-    version: "1.10.0",
+    version: "1.11.0",
     author: "bogz",
     settings: {
         budget: { title: "Answer size", about: "The most characters a harness answer is for Claude Code when it doesn't say, about four to a token.", kind: "number", least: 1000, most: 60000, step: 1000, default: 8000 },
@@ -131,10 +131,19 @@ func arguments_for(hex, chat) {
         arguments.push("--settings");
         arguments.push(settings);
     }
+    // The setting's tools and the rules the agent that started this one gave it, a line each (hex_agent_spawn's
+    // permissions), each rule its own argument so one with a space in it (Bash(git status:*)) stays whole
     let tools = hex.setting("allowed_tools").trim();
-    if (len(tools) > 0) {
+    let allowed = rules_of(chat, "allow");
+    if (len(tools) > 0 || len(allowed) > 0) {
         arguments.push("--allowedTools");
-        arguments.push(tools);
+        if (len(tools) > 0) arguments.push(tools);
+        for (rule in allowed) arguments.push(rule);
+    }
+    let denied = rules_of(chat, "deny");
+    if (len(denied) > 0) {
+        arguments.push("--disallowedTools");
+        for (rule in denied) arguments.push(rule);
     }
     let model = option(hex, chat, "model").trim();
     if (len(model) > 0) {
@@ -168,6 +177,11 @@ func arguments_for(hex, chat) {
 // An option of the chat's when it was started with one, the setting otherwise
 func option(hex, chat, id) {
     return chat.option(id) ?? hex.setting(id);
+}
+
+// The rules of a kind (allow or deny) the agent that started this one gave it, a line each in the chat's option
+func rules_of(chat, kind) {
+    return (chat.option(kind) ?? "").split("\n").map(rule => rule.trim()).filter(rule => len(rule) > 0);
 }
 
 // What takes back each question still waiting for the person, by the request it answers
