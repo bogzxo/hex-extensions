@@ -1,12 +1,12 @@
 // Codex as an agent system of Hex's. Codex starts one MCP connection a chat and wants the editor open already, so it
-// connects with --mcp-connect, which never opens a window of its own. From the Agents panel it runs codex exec --json,
-// every item it says (a message, its reasoning, a command, a file changed, an MCP call, a search) a row there, with
-// Hex's server handed to it by -c so its config needn't have it. Its config is the user's own, ~/.codex/config.toml, so
+// connects with --mcp-connect, which never opens a window of its own. From the Agents panel it runs codex app-server,
+// a conversation of JSON lines, every item it says (a message, its reasoning, a command, a file changed, an MCP call, a
+// search) a row there, its commands asked of Hex first, with Hex's server handed to it by -c so its config needn't have it. Its config is the user's own, ~/.codex/config.toml, so
 // connecting asks first and only ever adds the hex server, and teaching writes a few lines in the folder's AGENTS.md.
 let extension = {
     name: "Codex",
     description: "Codex connected to Hex and run from the Agents panel, finding code through Hex's index instead of rg and whole files.",
-    version: "1.4.0",
+    version: "1.8.0",
     author: "bogz",
     settings: {
         budget: { title: "Answer size", about: "The most characters a harness answer is for Codex when it doesn't say, about four to a token.", kind: "number", least: 1000, most: 60000, step: 1000, default: 6000 },
@@ -24,7 +24,14 @@ let instructions = "Find code through Hex before rg or reading whole files. hex_
 
 // What the Agents panel offers over its box for Codex, each kept in the setting of its id. The models and efforts are the
 // ones codex has cached for itself when that file is there, a fixed list of current ones when it isn't
+// How much context each of the models codex has cached has, by its slug, for the Agents panel's details
+let windows = {};
+
+// Its models by the names it gives them, from its own cache, handed to Hex with each chat so they're said in full
+let model_names = { list: [] };
+
 func options_for(hex) {
+    model_names.list = [];
     let models = [{ value: "", label: "Default model" }];
     let efforts = [{ value: "", label: "Default effort" }];
     let known = ["low", "medium", "high", "xhigh", "max", "ultra"];
@@ -36,8 +43,15 @@ func options_for(hex) {
         for (model in cached?.models ?? []) {
             if (model.visibility != "list") continue;
             models.push({ value: model.slug, label: model.display_name ?? model.slug });
+            if (model.display_name != null) model_names.list.push({ id: model.slug, name: model.display_name });
+            windows[model.slug] = model.context_window ?? 0;
             for (level in model.supported_reasoning_levels ?? []) seen.push(level.effort);
         }
+    }
+    // What it said itself over its cache file, once a run has asked it
+    if (len(listed_models.list) > 0) {
+        models = [{ value: "", label: "Default model" }];
+        for (model in listed_models.list) models.push(model);
     }
     if (len(models) == 1) {
         for (slug in ["gpt-6.1-sol", "gpt-6-astra", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"]) models.push({ value: slug, label: slug });
@@ -57,10 +71,19 @@ let teach_start = "<!-- hex tools -->";
 let teach_end = "<!-- /hex tools -->";
 let teaching = "## Finding code\n\nThis folder is open in Hex, which Codex reaches as the `hex` MCP server. Use its tools before rg or reading whole files.\n\n- `hex_map`, `hex_files` for the layout, `hex_symbols` for declarations, `hex_refs` for uses\n- `hex_search` text or a regex, ranked and grouped by file\n- `hex_skim` what files are, `hex_read` with a symbol for one method or class\n- `hex_terminal_run` to run a command and wait, `hex_changes` for what moved since an answer\n";
 
+// The hex object kept for the run's callbacks, which are only handed the chat and the line
+let hex_of = { hex: null };
+
 func on_start(hex) {
+    hex_of.hex = hex;
     if (hex.agent == null) {
         hex.say("needs a Hex with the agent harness (hex.agent)");
         return;
+    }
+    // The models it said the last time, the picker made of them from the start
+    if (hex.exists(models_file(hex))) {
+        let kept = hex.json_parse(hex.read(models_file(hex)))?.models ?? [];
+        if (len(kept) > 0) listed_models.list = kept;
     }
     say_who(hex);
     hex.command("Connect Codex to Hex", hex => connect(hex));
@@ -74,6 +97,9 @@ func say_who(hex) {
     hex.agent({
         id: "codex",
         name: "Codex",
+        // OpenAI's black and white, the light of it on a dark theme and the dark on a light one, for its badge
+        colour: "#ECECEC",
+        colour_light: "#0D0D0D",
         clients: ["codex"],
         budget: hex.setting("budget"),
         instructions: instructions,
@@ -84,40 +110,37 @@ func say_who(hex) {
             stdin: true,
             options: options_for(hex),
             arguments: (prompt, chat) => arguments_for(hex, chat),
+            message: (text, chat) => message_of(hex, text, chat),
+            // Stop interrupts the turn going on, its thread left whole, nothing said when there's none (it's killed)
+            stop: chat => stop_of(chat),
+            // The message Hex compacts with, turned into thread/compact/start once the thread is taken up
+            compact: "/compact",
             on_event: (chat, event) => heard(chat, event)
         }
     });
 }
 
-// What codex exec is run with for a turn, - for the prompt on its stdin, resume with the thread it was in so the chat
-// goes on. Hex's server is given as config on the line, its paths with forward slashes so TOML takes them as they are,
-// its calls given as long as hex_agent_wait waits (Codex gives up on a tool after a minute by itself), and switched on
-// in case the user's own config has it off, its tools let through without asking since nobody's there to say yes
+// What codex is run with for a turn, its app-server, a conversation of JSON lines on its stdin and stdout rather than a
+// prompt in and lines out. It's told what Hex is doing as it works (steered with turn/steer), asks before each command,
+// which Hex answers (declining a read or a search of the workspace the long way so it uses the hex tools), and says
+// where it stands against its limits, its tokens and its compactions as they happen. Hex's server is given as config on
+// the line, its paths with forward slashes so TOML takes them as they are, its calls given as long as hex_agent_wait
+// waits, switched on in case the user's own config has it off, and its tools let through without asking
 func arguments_for(hex, chat) {
+    conversation_of(chat, true);
     let server = hex.mcp_server(chat);
     let quoted = server.args.map(each => "\"" + each.replace("\\", "/") + "\"");
-    let arguments = ["exec", "--json", "--skip-git-repo-check", "--sandbox", option(hex, chat, "sandbox"),
+    let arguments = ["app-server",
         "-c", "mcp_servers.hex.command=\"" + server.command.replace("\\", "/") + "\"",
         "-c", "mcp_servers.hex.args=[" + quoted.join(",") + "]",
         "-c", "mcp_servers.hex.tool_timeout_sec=660",
         "-c", "mcp_servers.hex.enabled=true",
         "-c", "mcp_servers.hex.default_tools_approval_mode=\"approve\""];
-    let model = option(hex, chat, "model").trim();
-    if (len(model) > 0) {
-        arguments.push("--model");
-        arguments.push(model);
-    }
     let effort = option(hex, chat, "effort") ?? "";
     if (len(effort) > 0) {
         arguments.push("-c");
         arguments.push("model_reasoning_effort=\"" + effort + "\"");
     }
-    let thread = chat.session();
-    if (thread != null) {
-        arguments.push("resume");
-        arguments.push(thread);
-    }
-    arguments.push("-");
     return arguments;
 }
 
@@ -126,48 +149,263 @@ func option(hex, chat, id) {
     return chat.option(id) ?? hex.setting(id);
 }
 
-// A line of codex exec --json, what it says on the panel's rows
-func heard(chat, event) {
-    let item = event.item;
-    if (event.type == "thread.started") chat.session(event.thread_id);
-    else if (event.type == "item.started" && item != null) started(chat, item);
-    else if (event.type == "item.completed" && item != null) completed(chat, item);
-    else if (event.type == "turn.completed") {
-        let used = event.usage ?? {};
-        chat.usage({ input: used.input_tokens ?? 0, output: used.output_tokens ?? 0 });
-        chat.done();
+// Where each chat's conversation with its app-server is, by the chat. Started again with each turn's process: the thread
+// it's in, the turn going on, the number of the next request, what it's to be asked once its thread is ready, the
+// tokens it had said by the last count so each count adds only what's new, and how many messages it's taken in
+let conversations = {};
+
+func conversation_of(chat, fresh) {
+    let said = conversations[chat.id];
+    if (said == null || fresh) {
+        said = { thread: chat.session(), turn: null, next: 10, prompt: null, images: [], input: 0, output: 0, cached: 0, taken: 0 };
+        conversations[chat.id] = said;
     }
-    else if (event.type == "turn.failed") {
-        chat.error(event.error?.message ?? "the turn failed");
-        chat.done();
-    }
-    // Warnings come as errors too, a turn that fails says so with turn.failed
-    else if (event.type == "error") chat.note(event.message ?? "something went wrong");
+    return said;
 }
 
-// An item that takes a while, a row that's running until it's completed
-func started(chat, item) {
-    if (item.type == "command_execution") chat.tool(item.id, "command", item.command);
-    else if (item.type == "mcp_tool_call") chat.tool(item.id, "mcp__" + item.server + "__" + item.tool, item.arguments ?? "");
-    else if (item.type == "web_search") chat.tool(item.id, "web_search", item.query ?? "");
-    else if (item.type == "file_change") chat.tool(item.id, "file_change", changes_of(item));
+// The models it said it has (model/list), their names to Hex and the picker made of them, Hex told again only when
+// they're not what it had
+let listed_models = { list: [], said: "" };
+
+func models_listed(chat, data) {
+    let models = [];
+    let names = [];
+    for (model in data) {
+        let id = model.model ?? model.id;
+        if (id == null || model.hidden == true) continue;
+        let name = model.displayName ?? id;
+        models.push({ value: id, label: name, help: model.description });
+        if (name != id) names.push({ id: id, name: name });
+    }
+    if (len(models) == 0) return;
+    if (chat.models != null) chat.models(names);
+    let key = models.map(each => each.value + "=" + each.label).join("|");
+    if (key == listed_models.said) return;
+    listed_models.said = key;
+    listed_models.list = models;
+    if (hex_of.hex != null) {
+        // Kept for the next start, so the picker has Codex's own list from the start rather than once a run has asked
+        hex_of.hex.json_set(models_file(hex_of.hex), ["models"], models);
+        say_who(hex_of.hex);
+    }
+}
+
+// Where the models it said last are kept, in Hex's temp folder
+func models_file(hex) { return hex.temp + "/codex-models.json"; }
+
+// The turn going on interrupted, null with no turn to interrupt
+func stop_of(chat) {
+    let said = conversation_of(chat, false);
+    if (said.turn == null || said.thread == null) return null;
+    said.next = said.next + 1;
+    return { id: said.next, method: "turn/interrupt", params: { threadId: said.thread, turnId: said.turn } };
+}
+
+// What goes on its stdin when something's asked. The start of a turn is the handshake and the thread, started or taken
+// up again, the turn itself going once the thread's said ready (heard). Asked while a turn's going, it's steered into it
+func message_of(hex, text, chat) {
+    let said = conversation_of(chat, false);
+    if (chat.models != null) chat.models(model_names.list);
+    let images = chat.images != null ? chat.images() : [];
+    if (said.turn != null) {
+        said.next = said.next + 1;
+        return { id: said.next, method: "turn/steer", params: { threadId: said.thread, expectedTurnId: said.turn, input: input_of(text, images) } };
+    }
+
+    said.prompt = text;
+    said.images = images;
+    // /compact sums up the thread's context once it's taken up, in place of a turn
+    said.compact = text.trim() == "/compact" && said.thread != null;
+    let rules = (hex.harness_rules ?? "") + "\n" + instructions;
+    let thread = said.thread != null
+        ? { id: 2, method: "thread/resume", params: { threadId: said.thread, approvalPolicy: "untrusted", sandbox: option(hex, chat, "sandbox"), developerInstructions: rules, excludeTurns: true } }
+        : { id: 2, method: "thread/start", params: { approvalPolicy: "untrusted", sandbox: option(hex, chat, "sandbox"), cwd: chat.folder, developerInstructions: rules, model: model_of(hex, chat), ephemeral: false } };
+    return [
+        { id: 1, method: "initialize", params: { clientInfo: { name: "hex", title: "Hex", version: "1" }, capabilities: { experimentalApi: true } } },
+        { method: "initialized" },
+        // Its models as it has them now, the picker and their names put right by the answer (heard)
+        { id: 4, method: "model/list", params: {} },
+        thread
+    ];
+}
+
+// The model asked for, null for its own default
+func model_of(hex, chat) {
+    let model = (option(hex, chat, "model") ?? "").trim();
+    return len(model) > 0 ? model : null;
+}
+
+// What's asked as the app-server takes it, the words and the pictures pasted with them by their files
+func input_of(text, images) {
+    let input = [{ type: "text", text: text }];
+    for (image in images) input.push({ type: "localImage", path: image.path });
+    return input;
+}
+
+// A line of the app-server, an answer to something Hex asked, something it asks Hex, or something it says
+func heard(chat, event) {
+    let said = conversation_of(chat, false);
+    if (event.method == null) {
+        answered(chat, said, event);
+        return;
+    }
+    if (event.id != null) {
+        asked(chat, said, event);
+        return;
+    }
+    let params = event.params ?? {};
+    let method = event.method;
+    if (method == "item/started") started(chat, said, params.item);
+    else if (method == "item/completed") completed(chat, params.item);
+    else if (method == "turn/completed") {
+        said.turn = null;
+        let turn = params.turn ?? {};
+        if (turn.status == "failed") {
+            let message = turn.error?.message ?? "the turn failed";
+            if (!limit_said(chat, message)) chat.error(message);
+        }
+        chat.done();
+    }
+    else if (method == "thread/tokenUsage/updated") counted(chat, said, params.tokenUsage);
+    else if (method == "account/rateLimits/updated") limits_said(chat, params.rateLimits);
+    else if (method == "thread/compacted") {
+        chat.compacted({ trigger: said.compact == true ? "manual" : "auto" });
+        // Compacting as asked is all there is to that turn, ended here should no turn/completed follow
+        if (said.compact == true && said.turn == null) {
+            said.compact = false;
+            chat.done();
+        }
+    }
+    else if (method == "error") {
+        let message = params.error?.message ?? "something went wrong";
+        if (params.willRetry == true) chat.retry({ attempt: 0, why: message });
+        else if (!limit_said(chat, message)) chat.note(message);
+    }
+}
+
+// An answer to Hex's own request, the thread it's in (the turn asked for then) or the turn started
+func answered(chat, said, event) {
+    if (event.error != null) {
+        let message = event.error.message ?? "the app-server said no";
+        if (!limit_said(chat, message)) chat.error(message);
+        if (event.id == 2 || event.id == 3) chat.done();
+        return;
+    }
+    let result = event.result ?? {};
+    if (event.id == 4) {
+        models_listed(chat, result.data ?? []);
+        return;
+    }
+    if (event.id == 2) {
+        said.thread = result.thread?.id ?? said.thread;
+        if (said.thread != null) chat.session(said.thread);
+        if (said.compact == true) {
+            chat.write({ id: 3, method: "thread/compact/start", params: { threadId: said.thread } });
+            return;
+        }
+        let turn = { threadId: said.thread, input: input_of(said.prompt ?? "", said.images) };
+        let effort = option(hex_of.hex, chat, "effort") ?? "";
+        if (len(effort) > 0) turn.effort = effort;
+        chat.write({ id: 3, method: "turn/start", params: turn });
+    }
+    else if (event.id == 3) said.turn = result.turn?.id;
+}
+
+// Something the app-server asks Hex, a command to run or a file to change. A read or a search of the workspace by the
+// shell is declined so it goes to the hex tools instead, anything else let through, Hex having the person's word
+// already in the sandbox it was started with
+func asked(chat, said, event) {
+    let params = event.params ?? {};
+    if (event.method == "item/commandExecution/requestApproval") {
+        let instead = hex_of.hex?.harness_check != null ? hex_of.hex.harness_check(script_of(params.command ?? "")) : null;
+        if (instead != null) chat.note("$(shield) Turned back to Hex's tools: " + script_of(params.command ?? "") + ", " + instead);
+        chat.write({ id: event.id, result: { decision: instead != null ? "decline" : "accept" } });
+    }
+    else if (event.method == "item/fileChange/requestApproval") chat.write({ id: event.id, result: { decision: "accept" } });
+    else if (event.method == "mcpServer/elicitation/request") chat.write({ id: event.id, result: { action: "accept" } });
+    else chat.write({ id: event.id, error: { code: -32601, message: "Hex doesn't answer " + event.method } });
+}
+
+// The script a command runs, out of the shell it's wrapped in on Windows, "...powershell.exe" -Command 'ls'
+func script_of(command) {
+    let at = command.index_of("-Command ");
+    if (at < 0) return command;
+    let script = command.substring(at + 9).trim();
+    if (script.starts_with("'") && script.ends_with("'") && len(script) >= 2) script = script.substring(1, len(script) - 1);
+    else if (script.starts_with("\"") && script.ends_with("\"") && len(script) >= 2) script = script.substring(1, len(script) - 1);
+    return script;
+}
+
+// How many tokens it's used, said whole each time, so only what's new since the last count is added
+func counted(chat, said, usage) {
+    if (usage == null) return;
+    let total = usage.total ?? {};
+    let input = total.inputTokens ?? 0;
+    let output = total.outputTokens ?? 0;
+    let cached = total.cachedInputTokens ?? 0;
+    let context = usage.last?.inputTokens ?? 0;
+    chat.usage({ input: input > said.input ? input - said.input : 0, output: output > said.output ? output - said.output : 0, cache_read: cached > said.cached ? cached - said.cached : 0,
+        context: context, context_limit: usage.modelContextWindow ?? windows[chat.option("model") ?? ""] ?? 0 });
+    said.input = input;
+    said.output = output;
+    said.cached = cached;
+}
+
+// Where it stands against its plan's limits, each of its windows as chat.limit says it, the five hour one and the week.
+// Codex says no warning of its own, so one goes up past nine tenths
+func limits_said(chat, limits) {
+    if (limits == null || chat.limit == null) return;
+    for (window in [limits.primary, limits.secondary]) {
+        if (window == null) continue;
+        let used = (window.usedPercent ?? -100) / 100;
+        let minutes = window.windowDurationMins ?? 0;
+        let kind = minutes >= 10000 ? "seven_day" : minutes == 300 ? "five_hour" : "usage";
+        let status = limits.rateLimitReachedType != null && used >= 1 ? "rejected" : used >= 0.9 ? "allowed_warning" : "allowed";
+        chat.limit({ kind: kind, status: status, used: used, resets: window.resetsAt ?? 0 });
+    }
+}
+
+// A usage limit hit said as the limit it is, the time it resets as Codex says it in its words, true when it was one
+func limit_said(chat, message) {
+    if (chat.limit == null) return false;
+    let low = message.lower();
+    if (!low.contains("usage limit") && !low.contains("rate limit") && !low.contains("quota")) return false;
+    chat.limit({ kind: low.contains("rate limit") ? "rate" : "usage", status: "rejected", message: message });
+    return true;
+}
+
+// An item that takes a while, a row that's running until it's completed. What somebody said while it worked is a user
+// message after the first, which the panel's queued bubble was waiting for
+func started(chat, said, item) {
+    if (item == null) return;
+    if (item.type == "userMessage") {
+        said.taken = said.taken + 1;
+        if (said.taken > 1) chat.taken();
+    }
+    else if (item.type == "commandExecution") chat.tool(item.id, "command", script_of(item.command ?? ""));
+    else if (item.type == "mcpToolCall") chat.tool(item.id, "mcp__" + item.server + "__" + item.tool, item.arguments ?? "");
+    else if (item.type == "webSearch") chat.tool(item.id, "web_search", item.query ?? "");
+    else if (item.type == "fileChange") chat.tool(item.id, "file_change", changes_of(item));
 }
 
 func completed(chat, item) {
-    if (item.type == "agent_message") chat.text(item.text ?? "");
-    else if (item.type == "reasoning") chat.thinking(item.text ?? "");
-    else if (item.type == "command_execution") chat.tool_done(item.id, item.exit_code == 0, item.aggregated_output ?? "");
-    else if (item.type == "mcp_tool_call") chat.tool_done(item.id, item.status != "failed", item.result ?? item.error ?? "");
-    else if (item.type == "web_search") chat.tool_done(item.id, true, item.query ?? "");
-    else if (item.type == "file_change") {
-        // Codex says a file change once it's made, so its row starts and ends here
-        chat.tool(item.id, "file_change", changes_of(item));
-        chat.tool_done(item.id, item.status != "failed", changes_of(item));
+    if (item == null) return;
+    if (item.type == "agentMessage") chat.text(item.text ?? "");
+    else if (item.type == "reasoning") {
+        let summary = (item.summary ?? []).join("\n");
+        if (len(summary) > 0) chat.thinking(summary);
     }
-    else if (item.type == "todo_list") chat.note((item.items ?? []).map(each => (each.completed ? "[x] " : "[ ] ") + each.text).join("\n"));
-    // Codex says its warnings as error items, so they're notes and only turn.failed fails the turn
-    else if (item.type == "error") chat.note(item.message ?? "something went wrong");
+    else if (item.type == "commandExecution") {
+        if (item.status == "declined") chat.tool_done(item.id, false, "Declined, Hex's tools do this (hex_search, hex_read, hex_files)");
+        else chat.tool_done(item.id, item.status == "completed" && (item.exitCode ?? 0) == 0, item.aggregatedOutput ?? "");
+    }
+    else if (item.type == "mcpToolCall") chat.tool_done(item.id, item.status != "failed", item.result?.content ?? item.error ?? "");
+    else if (item.type == "webSearch") chat.tool_done(item.id, true, item.query ?? "");
+    else if (item.type == "fileChange") chat.tool_done(item.id, item.status != "failed" && item.status != "declined", changes_of(item));
+    else if (item.type == "contextCompaction") chat.compacted({ trigger: "auto" });
+    else if (item.type == "plan") chat.note(item.text ?? "");
 }
+
 
 // What a file change changed, a line a file with how
 func changes_of(item) {

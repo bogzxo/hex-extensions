@@ -6,7 +6,7 @@
 let extension = {
     name: "Claude Code",
     description: "Claude Code connected to Hex, finding code through Hex's index instead of grep and whole files.",
-    version: "1.5.0",
+    version: "1.11.0",
     author: "bogz",
     settings: {
         budget: { title: "Answer size", about: "The most characters a harness answer is for Claude Code when it doesn't say, about four to a token.", kind: "number", least: 1000, most: 60000, step: 1000, default: 8000 },
@@ -16,6 +16,13 @@ let extension = {
         permission_mode: { title: "Permissions", about: "What it may do without asking, since nobody's there to be asked in the panel.", kind: "choice",
             choices: ["acceptEdits", "default", "plan", "bypassPermissions"], labels: ["Edits accepted", "Ask (refused)", "Plan only", "Anything"],
             help: ["Changes files, runs only what's allowed.", "Anything that would ask is refused.", "Reads and plans, changes nothing.", "Runs anything at all, careful."], default: "acceptEdits" },
+        effort: { title: "Effort", about: "How hard it thinks, its own default when empty.", kind: "choice",
+            choices: ["", "low", "medium", "high", "xhigh", "max"], labels: ["Default", "Low", "Medium", "High", "Extra high", "Max"], default: "" },
+        fallback_model: { title: "Fallback model", about: "The model it falls back on while the one asked for is overloaded, a comma between several, none when empty.", kind: "text", default: "" },
+        max_budget: { title: "Budget a turn", about: "The most dollars a turn may spend before it stops, no limit at 0.", kind: "number", least: 0, most: 1000, step: 1, default: 0 },
+        harness_guard: { title: "Keep it on the harness", about: "What happens when it reaches for grep, find, cat, its own Grep and Glob, or its own Read, Edit and Write, over the workspace.", kind: "choice",
+            choices: ["strict", "insist", "remind", "off"], labels: ["Only Hex's tools in the workspace", "Turned back to Hex's tools", "Reminded of Hex's tools", "Left alone"],
+            help: ["Its searches, the shell's reads and its own Read, Edit and Write of the workspace are refused with the Hex tool that does each (hex_read, hex_edit, hex_write), so it works through Hex.", "Its searches and the shell's reads are refused with the Hex tool that does it, its own Read, Edit and Write are left alone.", "The call runs, with the Hex tool for it said beside it.", "Nothing is said."], default: "strict" },
         allowed_tools: { title: "Allowed tools", about: "Tools it may use without asking, a space between them. Hex's are mcp__hex.", kind: "text", default: "mcp__hex Read Grep Glob" }
     }
 };
@@ -28,6 +35,9 @@ let options = [
     { id: "model", title: "Model", icon: "sparkle", choices: [
         { value: "", label: "Default model" }, { value: "opus", label: "Opus" }, { value: "sonnet", label: "Sonnet" }, { value: "haiku", label: "Haiku" },
         { value: "claude-fable-5-2", label: "Fable" }] },
+    { id: "effort", title: "Effort", icon: "lightbulb", choices: [
+        { value: "", label: "Default effort" }, { value: "low", label: "Low" }, { value: "medium", label: "Medium" }, { value: "high", label: "High" },
+        { value: "xhigh", label: "Extra high" }, { value: "max", label: "Max" }] },
     { id: "permission_mode", title: "Permissions", icon: "shield", choices: [
         { value: "acceptEdits", label: "Edits allowed" }, { value: "default", label: "Ask first" }, { value: "plan", label: "Plan only" }, { value: "bypassPermissions", label: "Anything" }] }
 ];
@@ -37,10 +47,19 @@ let teach_start = "<!-- hex tools -->";
 let teach_end = "<!-- /hex tools -->";
 let teaching = "## Finding code\n\nThis folder is open in Hex, connected as an MCP server. Find code with its tools before grep or reading whole files, they answer in a fraction of the tokens.\n\n- `hex_map` the folders and what's in them, `hex_files` a file by part of its name\n- `hex_symbols` where something is declared, `hex_refs` where a name is used\n- `hex_search` text or a regex, ranked and grouped by file\n- `hex_skim` what files are without reading them, `hex_read` with a symbol for one method or class\n- `hex_terminal_run` runs a command and waits for it, `hex_changes` says what changed since an answer\n";
 
+// The hex object kept for the run's callbacks, which are only handed the chat and the line
+let hex_of = { hex: null };
+
 func on_start(hex) {
+    hex_of.hex = hex;
     if (hex.agent == null) {
         hex.say("needs a Hex with the agent harness (hex.agent)");
         return;
+    }
+    // The models it said the last time, so the picker has them from the start rather than once a run has asked
+    if (hex.exists(models_file(hex))) {
+        let kept = hex.json_parse(hex.read(models_file(hex)))?.models ?? [];
+        if (len(kept) > 0) discovered.models = kept;
     }
     say_who(hex);
     hex.command("Connect Claude Code to this folder", hex => connect(hex));
@@ -54,6 +73,9 @@ func say_who(hex) {
     hex.agent({
         id: "claude_code",
         name: "Claude Code",
+        // Claude's coral, a shade deeper on a light theme, for its badge in the chats and the systems panel
+        colour: "#D97757",
+        colour_light: "#C15F3C",
         clients: ["claude-code"],
         budget: hex.setting("budget"),
         instructions: instructions,
@@ -62,9 +84,15 @@ func say_who(hex) {
             icon: "sparkle",
             install: "Install it with npm install -g @anthropic-ai/claude-code, or say where it is in Claude Code's settings.",
             stdin: true,
-            options: options,
+            options: options_now(),
             arguments: (prompt, chat) => arguments_for(hex, chat),
-            message: (text, chat) => message_of(text),
+            message: (text, chat) => message_of(text, chat),
+            // Stop asks it to end its turn, its session left whole to go on from, rather than it being killed
+            stop: chat => interrupt_of(chat),
+            // The message that has it sum up its context to make room, its own slash command
+            compact: "/compact",
+            // Its slash commands, its own and the skills it found, as it said them in the handshake, for "/" in the box
+            commands: discovered.commands,
             on_event: (chat, event) => heard(chat, event)
         }
     });
@@ -74,20 +102,77 @@ func say_who(hex) {
 // what's asked while it works goes in too. It says back every message it takes in, so the panel knows it was. The hex
 // server in a config file of the chat's own, so nothing of the folder's .mcp.json is needed and chats running at once
 // don't write over each other's (the server told which chat it is, for the agents it starts), and the session it was in
-// so the chat goes on. What the chat was started with (an agent starting another with a model) over the settings
+// so the chat goes on. What the chat was started with (an agent starting another with a model) over the settings. A tool
+// its permission mode would ask about comes back on its stdout as a control request, asked of the person in the chat,
+// rather than refused because nobody is at its own prompt
 func arguments_for(hex, chat) {
+    introduce[chat.id] = true;
     let config = hex.temp + "/claude-mcp-" + chat.id + ".json";
     hex.json_set(config, ["mcpServers", "hex"], hex.mcp_server(chat));
-    let arguments = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--replay-user-messages", "--verbose", "--mcp-config", config, "--permission-mode", option(hex, chat, "permission_mode")];
+    let arguments = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--replay-user-messages", "--verbose", "--mcp-config", config, "--permission-mode", option(hex, chat, "permission_mode"), "--permission-prompt-tool", "stdio"];
+    // The harness said in the system prompt, where it weighs more than the server's instructions, so finding and
+    // reading code goes through Hex first. The shell is still there for what the harness doesn't do
+    if (hex.harness_rules != null) {
+        arguments.push("--append-system-prompt");
+        arguments.push(hex.harness_rules);
+        // Its own subagents are told nothing of what it was, so the Explore one it sends searching is made again here
+        // knowing the harness, in a file of the chat's own as the server is
+        let agents = hex.temp + "/claude-agents-" + chat.id + ".json";
+        hex.json_set(agents, ["Explore"], {
+            description: "Fast read-only agent for exploring the codebase, finding files, searching code and answering questions about it. Say how thorough to be, quick, medium or very thorough.",
+            prompt: "You explore a codebase and report back what you found, with path:line for everything, without changing anything. " + hex.harness_rules,
+            model: "haiku"
+        });
+        arguments.push("--agents");
+        arguments.push(agents);
+    }
+    // Told in its system prompt, it still drifts back to grep and cat as a long session leaves the prompt behind, so
+    // Hex itself is the hook it runs before its shell, Grep and Glob, which turns a read of the workspace back to the
+    // harness, and strict (the default) before its own Read, Edit and Write too, which hex_read, hex_edit and hex_write
+    // do in their place. In a settings file of the chat's own, the user's own settings kept as they are
+    let guard = hex.setting("harness_guard") ?? "strict";
+    if (guard != "off" && hex.harness_rules != null && hex.executable != null) {
+        let hook = "\"" + hex.executable.replace("\\", "/") + "\" --harness-hook --guard " + guard;
+        for (folder in hex.workspace()) hook = hook + " --folder \"" + folder.replace("\\", "/") + "\"";
+        let settings = hex.temp + "/claude-settings-" + chat.id + ".json";
+        hex.json_set(settings, ["hooks"], { PreToolUse: [{ matcher: "Bash|Grep|Glob|PowerShell|Read|Edit|MultiEdit|Write|NotebookEdit", hooks: [{ type: "command", command: hook, timeout: 10 }] }] });
+        arguments.push("--settings");
+        arguments.push(settings);
+    }
+    // The setting's tools and the rules the agent that started this one gave it, a line each (hex_agent_spawn's
+    // permissions), each rule its own argument so one with a space in it (Bash(git status:*)) stays whole
     let tools = hex.setting("allowed_tools").trim();
-    if (len(tools) > 0) {
+    let allowed = rules_of(chat, "allow");
+    if (len(tools) > 0 || len(allowed) > 0) {
         arguments.push("--allowedTools");
-        arguments.push(tools);
+        if (len(tools) > 0) arguments.push(tools);
+        for (rule in allowed) arguments.push(rule);
+    }
+    let denied = rules_of(chat, "deny");
+    if (len(denied) > 0) {
+        arguments.push("--disallowedTools");
+        for (rule in denied) arguments.push(rule);
     }
     let model = option(hex, chat, "model").trim();
     if (len(model) > 0) {
         arguments.push("--model");
         arguments.push(model);
+    }
+    let effort = option(hex, chat, "effort") ?? "";
+    if (len(effort) > 0) {
+        arguments.push("--effort");
+        arguments.push(effort);
+    }
+    let fallback = (hex.setting("fallback_model") ?? "").trim();
+    if (len(fallback) > 0) {
+        arguments.push("--fallback-model");
+        arguments.push(fallback);
+    }
+    // A setting kept as text by an older Hex reads as a number either way
+    let budget = number(hex.setting("max_budget") ?? 0) ?? 0;
+    if (typeof(budget) == "number" && budget > 0) {
+        arguments.push("--max-budget-usd");
+        arguments.push("" + budget);
     }
     let session = chat.session();
     if (session != null) {
@@ -102,22 +187,249 @@ func option(hex, chat, id) {
     return chat.option(id) ?? hex.setting(id);
 }
 
-// A message for claude's stdin, what somebody asked as a user's turn of stream-json
-func message_of(text) {
-    return { type: "user", message: { role: "user", content: [{ type: "text", text: text }] } };
+// The rules of a kind (allow or deny) the agent that started this one gave it, a line each in the chat's option
+func rules_of(chat, kind) {
+    return (chat.option(kind) ?? "").split("\n").map(rule => rule.trim()).filter(rule => len(rule) > 0);
+}
+
+// What takes back each question still waiting for the person, by the request it answers
+let leave_asked = {};
+
+// A tool asked leave for, answered on claude's stdin as control_response
+func asked_leave(chat, id, request) {
+    let tool = request.tool_name ?? "tool";
+    let input = request.input ?? {};
+    if ((tool == "Bash" || tool == "PowerShell") && hex_of.hex?.harness_check != null) {
+        let instead = hex_of.hex.harness_check(input.command ?? "");
+        if (instead != null) {
+            if (chat.note != null) chat.note("$(shield) Turned back to Hex's tools: " + (input.command ?? "") + ", " + instead);
+            leave_given(chat, id, input, false, "This reads the workspace the long way, use " + instead + ".");
+            return;
+        }
+    }
+    if (tool == "AskUserQuestion" && chat.question != null) {
+        asked_questions(chat, id, input);
+        return;
+    }
+    // A Hex with no cards to ask on lets it through, as it did before it was asked at all
+    if (chat.approval == null) {
+        leave_given(chat, id, input, true, null);
+        return;
+    }
+    let detail = input.command ?? input.file_path ?? input.description ?? "";
+    leave_asked[id] = chat.approval((request.display_name ?? tool) + " wants to run", detail, allowed => leave_given(chat, id, input, allowed, "The person said no."));
+}
+
+// How long its questions wait for the person before it's told to go on with its own pick
+let question_seconds = 300;
+
+// Its own AskUserQuestion, a card in the chat for each question with its options, the one it marks (Recommended) taken as
+// its pick. Once every one is answered the answers go back in the tool's input, keyed by each question as it asked it.
+// One nobody answers in time ends them all, the tool refused with word to go on with what it judges best
+func asked_questions(chat, id, input) {
+    let questions = input.questions ?? [];
+    let state = { answers: {}, left: len(questions), over: false, cards: [] };
+    if (state.left == 0) {
+        leave_given(chat, id, input, true, null);
+        return;
+    }
+    for (asked in questions) {
+        let labels = [];
+        let recommended = null;
+        for (option in asked.options ?? []) {
+            let label = option.label ?? "";
+            if (recommended == null && label.ends_with("(Recommended)")) recommended = len(labels);
+            labels.push(label);
+        }
+        let text = asked.question ?? "?";
+        state.cards.push(chat.question(text, labels, recommended, question_seconds, answer => question_answered(chat, id, input, state, text, answer), asked.multiSelect == true));
+    }
+    leave_asked[id] = () => withdraw_questions(state);
+}
+
+// Every card of a tool's questions taken back, those answered already left as they are
+func withdraw_questions(state) {
+    state.over = true;
+    for (withdraw in state.cards) withdraw();
+}
+
+// One of its questions answered, or with null left unanswered
+func question_answered(chat, id, input, state, text, answer) {
+    if (state.over) return;
+    if (answer == null) {
+        withdraw_questions(state);
+        leave_given(chat, id, input, false, "Nobody answered in " + (question_seconds / 60) + " minutes. Go on with the option you judge best and say which you took.");
+        return;
+    }
+    state.answers[text] = answer;
+    state.left = state.left - 1;
+    if (state.left > 0) return;
+    state.over = true;
+    input.answers = state.answers;
+    leave_given(chat, id, input, true, null);
+}
+
+// The answer to a tool asked leave for, written on claude's stdin and the question forgotten
+func leave_given(chat, id, input, allowed, message) {
+    let said = allowed ? { behavior: "allow", updatedInput: input } : { behavior: "deny", message: message };
+    chat.write({ type: "control_response", response: { subtype: "success", request_id: id, response: said } });
+    leave_asked[id] = null;
+}
+
+// A message for claude's stdin, what somebody asked as a user's turn of stream-json, with the pictures pasted into it
+// in front as image blocks so it sees them as it reads the words. A Hex without chat.images has none to give
+func message_of(text, chat) {
+    let message = user_message_of(text, chat);
+    // The first message of a run goes with the handshake an SDK starts with, whose answer says its models and commands
+    if (chat != null && introduce[chat.id] == true) {
+        introduce[chat.id] = false;
+        return [{ type: "control_request", request_id: "hex-init-" + chat.id, request: { subtype: "initialize" } }, message];
+    }
+    return message;
+}
+
+// The chats whose run hasn't been introduced yet, by the chat, set as each run starts
+let introduce = {};
+
+// What it said of itself the last time it was asked, its models for the picker and its slash commands
+let discovered = { models: [], commands: [], said: "" };
+
+// The answer to the handshake, its models in the picker by the names it gives them (Hex told again only when they changed)
+func introduced(chat, said) {
+    let models = [];
+    for (model in said.models ?? []) {
+        if (model.value == null) continue;
+        models.push({ value: model.value == "default" ? "" : model.value, label: model.displayName ?? model.value, help: model.description });
+    }
+    let commands = [];
+    for (command in said.commands ?? []) {
+        if (command.name != null) commands.push({ name: command.name, about: command.description ?? "", hint: command.argumentHint ?? "" });
+    }
+    let key = models.map(each => each.value + "=" + each.label).join("|") + "#" + commands.map(each => each.name).join("|");
+    if ((len(models) == 0 && len(commands) == 0) || key == discovered.said) return;
+    discovered.commands = commands;
+    if (len(models) > 0) {
+        discovered.models = models;
+        // Kept for the next start, Claude Code's own list of the models the account may use, never written here by hand
+        if (hex_of.hex != null) hex_of.hex.json_set(models_file(hex_of.hex), ["models"], models);
+    }
+    discovered.said = key;
+    if (hex_of.hex != null) say_who(hex_of.hex);
+}
+
+// Where the models it said last are kept, in Hex's temp folder beside its context windows
+func models_file(hex) { return hex.temp + "/claude-models.json"; }
+
+// The options with the models it said in place of those written here, once it's said them
+func options_now() {
+    if (len(discovered.models) == 0) return options;
+    let now = [{ id: "model", title: "Model", icon: "sparkle", choices: discovered.models }];
+    for (each in options) if (each.id != "model") now.push(each);
+    return now;
+}
+
+// Its turn interrupted through its control protocol
+func interrupt_of(chat) {
+    return { type: "control_request", request_id: "hex-stop-" + chat.id, request: { subtype: "interrupt" } };
+}
+
+// A turn of the user's as stream-json
+func user_message_of(text, chat) {
+    let content = [];
+    if (chat != null && chat.images != null) {
+        for (image in chat.images()) content.push({ type: "image", source: { type: "base64", media_type: image.media_type, data: image.data } });
+    }
+    content.push({ type: "text", text: text });
+    return { type: "user", message: { role: "user", content: content } };
 }
 
 // A line of claude's stream-json, what it says on the panel's rows
 func heard(chat, event) {
+    // It asks leave for a tool nothing else has said yes or no to. A read of the workspace by the shell is turned back at
+    // once with the Hex tool for it, anything else asked of the person in the chat, the answer written back on its stdin
+    if (event.type == "control_request" && event.request?.subtype == "can_use_tool") {
+        asked_leave(chat, event.request_id, event.request);
+        return;
+    }
+    if (event.type == "control_response") {
+        let response = event.response ?? {};
+        if ((response.request_id ?? "").starts_with("hex-init-") && response.subtype == "success") introduced(chat, response.response ?? {});
+        return;
+    }
+    if (event.type == "control_cancel_request") {
+        let withdraw = leave_asked[event.request_id];
+        if (withdraw != null) withdraw();
+        return;
+    }
+    // What a subagent of its own does comes with the id of the Task that started it, and goes on that Task's row as a
+    // step rather than rows of its own among the chat's
+    let parent = event.parent_tool_use_id;
+    if (parent != null && chat.progress != null) {
+        if (event.type == "assistant") {
+            for (part in event.message?.content ?? []) {
+                if (part.type == "tool_use") chat.progress(parent, step_of(part.name, part.input));
+                else if (part.type == "text" && len(part.text.trim()) > 0) chat.progress(parent, part.text.trim().split("\n")[0]);
+            }
+        }
+        return;
+    }
     if (event.type == "system" && event.subtype == "init") {
         chat.session(event.session_id);
-        chat.usage({ model: event.model });
+        // How much context the model has is only said as a turn ends, so a long first turn (a coordinator waiting on
+        // its agents) would show no bar until it's over. The window this model had last time is said at once instead
+        chat.usage({ model: event.model, context_limit: known_window(event.model) });
+        return;
+    }
+    // Its context summed up to make room, by itself as it filled or because it was asked to with /compact. The
+    // tokens it held before and after, after only from versions that say it
+    if (event.type == "system" && event.subtype == "compact_boundary") {
+        let compact = event.compact_metadata ?? {};
+        if (chat.compacted != null) chat.compacted({ trigger: compact.trigger ?? "auto", before: compact.pre_tokens ?? 0, after: compact.post_tokens ?? 0 });
+        else chat.note("context compacted");
+        return;
+    }
+    // A call that failed and is tried again, overloaded, rate limited or a server error, with the wait before the next
+    if (event.type == "system" && event.subtype == "api_retry") {
+        let why = event.error ?? "";
+        if (event.error_status != null) why = why + " (" + event.error_status + ")";
+        if (chat.retry != null) chat.retry({ attempt: event.attempt ?? 1, most: event.max_retries ?? 0, delay: (event.retry_delay_ms ?? 0) / 1000, why: why.replace("_", " ") });
+        return;
+    }
+    if (event.type == "system") return;
+    // Where it stands against the plan's limits, said once a turn. The window that's binding when it's warned or
+    // refused, the fullest of them otherwise, since that's the one that runs out first
+    if (event.type == "rate_limit_event") {
+        if (chat.limit != null) {
+            // Every window it said, the session's and the week's each with its own bar, the binding one last so it's
+            // the one the chat goes by
+            let info = event.rate_limit_info ?? {};
+            let binding = limit_of(info);
+            let windows = info.unifiedWindows;
+            if (windows != null) {
+                for (name in keys(windows)) {
+                    if (name != binding.kind) {
+                        let window = windows[name];
+                        chat.limit({ kind: name, status: window?.status ?? "allowed", used: window?.utilization ?? -1, resets: window?.resetsAt ?? 0, message: null });
+                    }
+                }
+            }
+            chat.limit(binding);
+        }
         return;
     }
     if (event.type == "assistant") {
+        // What it was reading as it said this, all of its context as of this call
+        let call = event.message?.usage;
+        if (call != null)
+            chat.usage({ context: (call.input_tokens ?? 0) + (call.cache_read_input_tokens ?? 0) + (call.cache_creation_input_tokens ?? 0) });
         for (part in event.message?.content ?? []) {
             if (part.type == "text") chat.text(part.text);
             else if (part.type == "thinking") chat.thinking(part.thinking);
+            else if (part.type == "tool_use" && part.name == "TodoWrite") {
+                // Its to-do list as a checklist row, as Codex's is, rather than a tool row of JSON
+                todos[part.id] = true;
+                chat.note((part.input?.todos ?? []).map(todo => mark_of(todo.status) + todo.content).join("\n"));
+            }
             else if (part.type == "tool_use") chat.tool(part.id, part.name, part.input);
         }
         return;
@@ -125,10 +437,12 @@ func heard(chat, event) {
     if (event.type == "user") {
         // A message said back is one it took in, the first it was started with and every one asked as it worked
         if (event.isReplay ?? false) {
-            chat.taken();
+            // What a slash command printed comes back the same way, and wasn't asked as it worked
+            if (!said_by_command(event.message?.content)) chat.taken();
             return;
         }
         for (part in event.message?.content ?? []) {
+            if (part.type == "tool_result" && todos[part.tool_use_id] != null) continue;
             if (part.type == "tool_result") chat.tool_done(part.tool_use_id, !(part.is_error ?? false), text_of(part.content));
         }
         return;
@@ -136,10 +450,100 @@ func heard(chat, event) {
     if (event.type == "result") {
         chat.session(event.session_id);
         let used = event.usage ?? {};
-        chat.usage({ input: (used.input_tokens ?? 0) + (used.cache_read_input_tokens ?? 0) + (used.cache_creation_input_tokens ?? 0), output: used.output_tokens ?? 0, cost: event.total_cost_usd ?? 0 });
+        chat.usage({ input: (used.input_tokens ?? 0) + (used.cache_read_input_tokens ?? 0) + (used.cache_creation_input_tokens ?? 0), output: used.output_tokens ?? 0, cost: event.total_cost_usd ?? 0,
+            cache_read: used.cache_read_input_tokens ?? 0, context_limit: window_of(event.modelUsage) });
         if (event.is_error) chat.error(event.result ?? event.subtype);
         chat.done();
     }
+}
+
+// The to-do lists it wrote, by the id of the call, whose results say nothing worth a row
+let todos = {};
+
+// A to-do's box by how far it's got
+func mark_of(status) {
+    if (status == "completed") return "[x] ";
+    if (status == "in_progress") return "[~] ";
+    return "[ ] ";
+}
+
+// Whether a message said back is what a slash command printed rather than something asked
+func said_by_command(content) {
+    let text = typeof(content) == "text" ? content : (content ?? []).map(part => part?.text ?? "").join("");
+    return text.contains("<local-command-stdout>") || text.contains("<local-command-stderr>");
+}
+
+// The limit a rate_limit_event says, in the words of chat.limit. The binding window when it's not all clear, the
+// fullest of its windows when it is
+func limit_of(info) {
+    let kind = info.rateLimitType ?? "";
+    let used = info.utilization ?? -1;
+    let resets = info.resetsAt ?? 0;
+    let windows = info.unifiedWindows;
+    if (windows != null) {
+        if ((info.status ?? "allowed") != "allowed" && windows[kind] != null) {
+            used = windows[kind].utilization ?? used;
+            resets = windows[kind].resetsAt ?? resets;
+        } else {
+            for (name in keys(windows)) {
+                let window = windows[name];
+                if ((window?.utilization ?? -1) > used) {
+                    kind = name;
+                    used = window.utilization;
+                    resets = window.resetsAt ?? resets;
+                }
+            }
+        }
+    }
+    let message = null;
+    if (info.status == "rejected") message = "Claude Code waits for the limit to reset, or uses extra usage when it's on.";
+    return { kind: kind, status: info.status ?? "allowed", used: used, resets: resets, message: message };
+}
+
+// How much context the models of a turn have, the most of them, 0 when it didn't say. Each one's kept for the next
+// chat on it to know from its start
+func window_of(models) {
+    let most = 0;
+    if (models == null) return most;
+    for (name in keys(models)) {
+        let window = models[name]?.contextWindow ?? 0;
+        if (window > 0) remember_window(name, window);
+        if (window > most) most = window;
+    }
+    return most;
+}
+
+// The context windows the models had, by name, kept in a file of Hex's temp folder so they last from run to run
+let windows = { known: null };
+
+func windows_file() { return hex_of.hex.temp + "/claude-windows.json"; }
+
+func known_window(model) {
+    if (model == null || hex_of.hex == null) return 0;
+    if (windows.known == null) {
+        windows.known = {};
+        if (hex_of.hex.exists(windows_file())) windows.known = hex_of.hex.json_parse(hex_of.hex.read(windows_file())) ?? {};
+    }
+    let window = windows.known[model] ?? 0;
+    // A model asked for with [1m] has a million tokens whether or not it was seen before
+    if (window == 0 && model.contains("[1m]")) window = 1000000;
+    return window;
+}
+
+func remember_window(model, window) {
+    if (hex_of.hex == null || known_window(model) == window) return;
+    windows.known[model] = window;
+    hex_of.hex.json_set(windows_file(), [model], window);
+}
+
+// A subagent's tool call said short, its name without the mcp__server__ in front and the part of what it was given
+// that says most
+func step_of(name, input) {
+    let parts = name.split("__");
+    let tool = parts[len(parts) - 1];
+    let what = input?.description ?? input?.query ?? input?.pattern ?? input?.symbol ?? input?.command ?? input?.file_path ?? input?.path ?? input?.paths ?? input?.name ?? "";
+    if (typeof(what) != "text") return tool;
+    return tool + " " + what;
 }
 
 // What a tool said back, a text or a list of parts of which the texts are kept
