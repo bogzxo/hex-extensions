@@ -92,6 +92,9 @@ func say_who(hex) {
     hex.agent({
         id: "codex",
         name: "Codex",
+        // OpenAI's black and white, the light of it on a dark theme and the dark on a light one, for its badge
+        colour: "#ECECEC",
+        colour_light: "#0D0D0D",
         clients: ["codex"],
         budget: hex.setting("budget"),
         instructions: instructions,

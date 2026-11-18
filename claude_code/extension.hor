@@ -68,6 +68,9 @@ func say_who(hex) {
     hex.agent({
         id: "claude_code",
         name: "Claude Code",
+        // Claude's coral, a shade deeper on a light theme, for its badge in the chats and the systems panel
+        colour: "#D97757",
+        colour_light: "#C15F3C",
         clients: ["claude-code"],
         budget: hex.setting("budget"),
         instructions: instructions,

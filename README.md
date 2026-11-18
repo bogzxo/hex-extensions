@@ -11,7 +11,6 @@ a newer version. An install is a copy of the folder into the `extensions` folder
 | `claude_code` | Claude Code connected to Hex, its answer size, `.mcp.json` and a CLAUDE.md block about the tools |
 | `codex` | Codex connected to Hex through `--mcp-connect`, its answer size and an AGENTS.md block |
 | `emmet` | HTML abbreviations written out on Tab or Ctrl+Alt+E, `ul>li.item$*3` and the rest of Emmet's shorthand |
-| `gemini` | Gemini CLI connected to Hex through `.gemini/settings.json`, its answer size and a GEMINI.md block about the tools |
 | `hello_dolly` | A random greeting in the title bar as Hex starts, and a new one every minute |
 | `move_editor` | Fighter2D's moves edited on a timeline, frame by frame, with their boxes on the sprite |
 | `pretty_json` | JSON formatted, minified, its keys sorted, and checked as it's saved |

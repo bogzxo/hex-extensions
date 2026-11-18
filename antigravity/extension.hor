@@ -7,7 +7,7 @@
 let extension = {
     name: "Antigravity",
     description: "Google's Antigravity CLI (agy) run from the Agents panel on your Google subscription, connected to Hex and finding code through its index.",
-    version: "1.0.4",
+    version: "1.1.0",
     author: "bogz",
     settings: {
         budget: { title: "Answer size", about: "The most characters a harness answer is for Antigravity when it doesn't say, about four to a token.", kind: "number", least: 1000, most: 60000, step: 1000, default: 6000 },
@@ -56,6 +56,9 @@ func say_who(hex) {
     hex.agent({
         id: "antigravity",
         name: "Antigravity",
+        // Google's blue, Antigravity's own, for its badge, the deeper Google blue on a light theme
+        colour: "#4C8DF6",
+        colour_light: "#1A73E8",
         clients: ["antigravity", "agy", "antigravity-cli"],
         budget: hex.setting("budget"),
         instructions: instructions,
@@ -67,7 +70,7 @@ func say_who(hex) {
             options: options,
             arguments: (prompt, chat) => arguments_for(hex, chat),
             message: (text, chat) => message_of(text),
-            on_event: (chat, event) => heard(chat, event)
+            on_event: (chat, event) => heard(hex, chat, event)
         }
     });
 }
@@ -148,13 +151,23 @@ func window_of(model) {
 }
 
 // A line of agy's stream-json, what it says on the panel's rows. Each line is { event: kind, kind: what it says }
-func heard(chat, line) {
+func heard(hex, chat, line) {
     if (line.event == "init") {
         if (line.conversation_id != null) chat.session(line.conversation_id);
-        models[chat.id] = line.init?.model;
-        if (line.init?.model != null) chat.usage({ model: line.init.model });
+        // The model it was told, which its init names, otherwise the one picked for the chat, and with neither it's read
+        // from agy's own log once the turn's under way (model_from_log)
+        let picked = (chat.option("model") ?? "").trim();
+        models[chat.id] = line.init?.model ?? (len(picked) > 0 ? picked : null);
+        if (models[chat.id] != null) chat.usage({ model: models[chat.id] });
     }
     else if (line.event == "step_update") {
+        if (models[chat.id] == null) {
+            let logged = model_from_log(hex);
+            if (logged != null) {
+                models[chat.id] = logged;
+                chat.usage({ model: logged });
+            }
+        }
         stepped(chat, line.step_update ?? {});
     }
     else if (line.event == "result") {
@@ -168,6 +181,25 @@ func heard(chat, line) {
         if (len(denied) > 0) chat.note("Antigravity wasn't let do " + denied.join(", ") + ", Approvals in its options lets it");
         chat.done();
     }
+}
+
+// The model agy runs when none was asked for, which it says nowhere but its own log, the label of the last "selected
+// model override" in it (Gemini 3.8 Flash (High)). The log is agy's on this machine and small, null when it's not there
+func model_from_log(hex) {
+    let read = hex.read_lines(hex.home + "/.gemini/antigravity-cli/cli.log", 0);
+    let lines = read?.lines ?? [];
+    let marker = "selected model override to backend: label=\"";
+    let i = len(lines) - 1;
+    while (i >= 0) {
+        let at = lines[i].index_of(marker);
+        if (at >= 0) {
+            let rest = lines[i].substring(at + len(marker));
+            let end = rest.index_of("\"");
+            return end > 0 ? rest.substring(0, end) : null;
+        }
+        i = i - 1;
+    }
+    return null;
 }
 
 // A step of the turn. What it was asked taken in, its answer in fragments, a tool going and then done by its step's number
