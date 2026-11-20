@@ -441,7 +441,10 @@ func heard(chat, event) {
             if (!said_by_command(event.message?.content)) chat.taken();
             return;
         }
-        for (part in event.message?.content ?? []) {
+        // A message that is only text, the summary a compact starts the new context with, holds no tool results
+        let parts = event.message?.content;
+        if (typeof(parts) == "text") return;
+        for (part in parts ?? []) {
             if (part.type == "tool_result" && todos[part.tool_use_id] != null) continue;
             if (part.type == "tool_result") chat.tool_done(part.tool_use_id, !(part.is_error ?? false), text_of(part.content));
         }
