@@ -122,6 +122,12 @@ func arguments_for(hex, chat) {
         let folders = hex.workspace();
         let own = hex.claude_servers(len(folders) > 0 ? folders[0] : "");
         for (name in keys(own)) hex.json_set(config, ["mcpServers", name], own[name]);
+        // The dotnet kit's Roslyn navigator, which --strict-mcp-config would otherwise leave out, one process for the
+        // worktree's agents in Hex rather than a gigabyte for each (null when it isn't on the PATH)
+        if (hex.claude_plugin != null && hex.claude_plugin("dotnet-claude-kit")) {
+            let roslyn = hex.shared_server(chat, "roslyn", "cwm-roslyn-navigator", []);
+            if (roslyn != null) hex.json_set(config, ["mcpServers", "cwm-roslyn-navigator"], roslyn);
+        }
         arguments.push("--strict-mcp-config");
     }
     // Written whole every run, the chat's file kept from a run with the other setting says nothing of it
