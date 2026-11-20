@@ -20,9 +20,9 @@ let extension = {
             choices: ["", "low", "medium", "high", "xhigh", "max"], labels: ["Default", "Low", "Medium", "High", "Extra high", "Max"], default: "" },
         fallback_model: { title: "Fallback model", about: "The model it falls back on while the one asked for is overloaded, a comma between several, none when empty.", kind: "text", default: "" },
         max_budget: { title: "Budget a turn", about: "The most dollars a turn may spend before it stops, no limit at 0.", kind: "number", least: 0, most: 1000, step: 1, default: 0 },
-        harness_guard: { title: "Keep it on the harness", about: "What happens when it reaches for grep, find, cat, its own Grep and Glob, or its own Read, Edit and Write, over the workspace.", kind: "choice",
-            choices: ["strict", "insist", "remind", "off"], labels: ["Only Hex's tools in the workspace", "Turned back to Hex's tools", "Reminded of Hex's tools", "Left alone"],
-            help: ["Its searches, the shell's reads and its own Read, Edit and Write of the workspace are refused with the Hex tool that does each (hex_read, hex_edit, hex_write), so it works through Hex.", "Its searches and the shell's reads are refused with the Hex tool that does it, its own Read, Edit and Write are left alone.", "The call runs, with the Hex tool for it said beside it.", "Nothing is said."], default: "strict" },
+        harness_guard: { title: "Use Hex's tools in the workspace", about: "Hex's own tools find, read and change the workspace's files faster and in fewer tokens. This says what happens when Claude Code uses its own instead: grep, find or cat in the shell, or its Grep, Glob, Read, Edit and Write.", kind: "choice",
+            choices: ["strict", "insist", "remind", "off"], labels: ["Always use Hex's tools", "Search and read with Hex's tools", "Suggest Hex's tools", "Don't interfere"],
+            help: ["Searching, reading and editing workspace files any other way is blocked, and Claude Code is told which Hex tool to use instead (hex_search, hex_read, hex_edit, hex_write).", "Searches and shell reads are blocked and pointed to the Hex tool. Its own Read, Edit and Write still work.", "Nothing is blocked. Claude Code is told which Hex tool would have done it.", "Claude Code uses whatever tools it likes."], default: "strict" },
         allowed_tools: { title: "Allowed tools", about: "Tools it may use without asking, a space between them. Hex's are mcp__hex.", kind: "text", default: "mcp__hex Read Grep Glob" }
     }
 };
