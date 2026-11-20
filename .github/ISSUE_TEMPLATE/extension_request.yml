@@ -1,0 +1,16 @@
+name: Extension request
+description: An extension Hex should have, a language, a tool, a look or a task runner
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What should the extension do?
+      description: The language, tool or look, and what Hex should do with it.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: What's it for?
+      description: What you're working on when you miss it, and links to the tool or language server if there is one.
