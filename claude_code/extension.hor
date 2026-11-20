@@ -23,6 +23,9 @@ let extension = {
         harness_guard: { title: "Use Hex's tools in the workspace", about: "Hex's own tools find, read and change the workspace's files faster and in fewer tokens. This says what happens when Claude Code uses its own instead: grep, find or cat in the shell, or its Grep, Glob, Read, Edit and Write.", kind: "choice",
             choices: ["strict", "insist", "remind", "off"], labels: ["Always use Hex's tools", "Search and read with Hex's tools", "Suggest Hex's tools", "Don't interfere"],
             help: ["Searching, reading and editing workspace files any other way is blocked, and Claude Code is told which Hex tool to use instead (hex_search, hex_read, hex_edit, hex_write).", "Searches and shell reads are blocked and pointed to the Hex tool. Its own Read, Edit and Write still work.", "Nothing is blocked. Claude Code is told which Hex tool would have done it.", "Claude Code uses whatever tools it likes."], default: "strict" },
+        servers: { title: "Servers for each agent", about: "What Claude Code starts beside every agent Hex runs. Plugins' language servers and MCP servers load the whole solution once per agent, a gigabyte and half a minute of CPU each, where Hex already has the code indexed and its own language servers running.", kind: "choice",
+            choices: ["shared", "own"], labels: ["Share Hex's", "Each agent its own"],
+            help: ["Your own MCP servers start as they always have, plugins' C# and Python language servers and their MCP servers don't, Hex's tools answer what they would.", "Everything Claude Code would start by itself, for every agent."], default: "shared" },
         allowed_tools: { title: "Allowed tools", about: "Tools it may use without asking, a space between them. Hex's are mcp__hex.", kind: "text", default: "mcp__hex Read Grep Glob" }
     }
 };
@@ -110,6 +113,21 @@ func arguments_for(hex, chat) {
     let config = hex.temp + "/claude-mcp-" + chat.id + ".json";
     hex.json_set(config, ["mcpServers", "hex"], hex.mcp_server(chat));
     let arguments = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--replay-user-messages", "--verbose", "--mcp-config", config, "--permission-mode", option(hex, chat, "permission_mode"), "--permission-prompt-tool", "stdio"];
+    // Shared, the config says every server it gets and it starts no other: the user's own as Claude Code would have
+    // started them, and not the plugins' (the dotnet kit's Roslyn navigator loading the whole solution for every agent).
+    // Their skills and agents stay, those aren't servers. The plugins that are only language servers are switched off
+    // in the chat's settings below, Hex runs those once for everybody
+    let shared = (hex.setting("servers") ?? "shared") == "shared" && hex.claude_servers != null;
+    if (shared) {
+        let folders = hex.workspace();
+        let own = hex.claude_servers(len(folders) > 0 ? folders[0] : "");
+        for (name in keys(own)) hex.json_set(config, ["mcpServers", name], own[name]);
+        arguments.push("--strict-mcp-config");
+    }
+    // Written whole every run, the chat's file kept from a run with the other setting says nothing of it
+    let settings = hex.temp + "/claude-settings-" + chat.id + ".json";
+    hex.json_set(settings, ["enabledPlugins"], shared ? { "csharp-lsp@claude-plugins-official": false, "pyright-lsp@claude-plugins-official": false } : {});
+    let settled = shared;
     // The harness said in the system prompt, where it weighs more than the server's instructions, so finding and
     // reading code goes through Hex first. The shell is still there for what the harness doesn't do
     if (hex.harness_rules != null) {
@@ -134,8 +152,10 @@ func arguments_for(hex, chat) {
     if (guard != "off" && hex.harness_rules != null && hex.executable != null) {
         let hook = "\"" + hex.executable.replace("\\", "/") + "\" --harness-hook --guard " + guard;
         for (folder in hex.workspace()) hook = hook + " --folder \"" + folder.replace("\\", "/") + "\"";
-        let settings = hex.temp + "/claude-settings-" + chat.id + ".json";
         hex.json_set(settings, ["hooks"], { PreToolUse: [{ matcher: "Bash|Grep|Glob|PowerShell|Read|Edit|MultiEdit|Write|NotebookEdit", hooks: [{ type: "command", command: hook, timeout: 10 }] }] });
+        settled = true;
+    }
+    if (settled) {
         arguments.push("--settings");
         arguments.push(settings);
     }
