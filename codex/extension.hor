@@ -6,7 +6,7 @@
 let extension = {
     name: "Codex",
     description: "Codex connected to Hex and run from the Agents panel, finding code through Hex's index instead of rg and whole files.",
-    version: "1.8.0",
+    version: "1.9.0",
     author: "bogz",
     settings: {
         budget: { title: "Answer size", about: "The most characters a harness answer is for Codex when it doesn't say, about four to a token.", kind: "number", least: 1000, most: 60000, step: 1000, default: 6000 },
@@ -115,9 +115,83 @@ func say_who(hex) {
             stop: chat => stop_of(chat),
             // The message Hex compacts with, turned into thread/compact/start once the thread is taken up
             compact: "/compact",
+            commands: commands_now(),
+            strict_commands: true,
             on_event: (chat, event) => heard(chat, event)
         }
     });
+}
+
+// The app-server has structured requests, not the terminal's slash parser.
+let listed_skills = { list: [] };
+func commands_now() {
+    let commands = [
+        { name: "compact", about: "Summarize this thread to free context." },
+        { name: "review", about: "Review uncommitted changes, or follow custom review instructions.", hint: "[instructions]" },
+        { name: "skills", about: "Refresh and list the skills available in this workspace." },
+        { name: "mcp", about: "List the connected MCP servers and their authentication status." }
+    ];
+    for (skill in listed_skills.list)
+        if (!commands.map(each => each.name).contains(skill.name))
+            commands.push({ name: skill.name, about: skill.interface?.shortDescription ?? skill.shortDescription ?? skill.description ?? "", hint: "[arguments]" });
+    return commands;
+}
+
+func slash_of(text) {
+    let trimmed = text.trim();
+    if (!trimmed.starts_with("/")) return null;
+    let head = trimmed.split(" ")[0].split("\t")[0].split("\r")[0].split("\n")[0];
+    if (len(head) < 2) return null;
+    let name = head.substring(1);
+    if (name.contains("/") || name.contains("\\")) return null;
+    return { name: name.lower(), arguments: trimmed.substring(len(head)).trim() };
+}
+
+func skills_listed(chat, said, data) {
+    said.skills = [];
+    for (entry in data)
+        for (skill in entry.skills ?? [])
+            if (skill.enabled != false && skill.name != null && skill.path != null) said.skills.push(skill);
+    said.skills_ready = true;
+    listed_skills.list = said.skills;
+    if (hex_of.hex != null) say_who(hex_of.hex);
+    if (said.command?.name == "skills") {
+        chat.text(len(said.skills) == 0 ? "No enabled skills were found." : said.skills.map(skill => "/" + skill.name + " — " + (skill.description ?? "")).join("\n"));
+        chat.done();
+    }
+    else start_requested(chat, said);
+}
+
+// A command is dispatched only after its prerequisites have arrived, regardless of response order.
+func start_requested(chat, said) {
+    if (said.ready != true || said.sent == true) return;
+    let command = said.command;
+    if (command?.name == "skills" || command?.name == "mcp") return;
+    if (command != null && command.name != "compact" && command.name != "review" && said.skills_ready != true) return;
+    said.sent = true;
+    if (command?.name == "compact") {
+        if (len(command.arguments) > 0) { chat.error("/compact does not take arguments in Codex."); chat.done(); return; }
+        chat.write({ id: 3, method: "thread/compact/start", params: { threadId: said.thread } });
+        return;
+    }
+    if (command?.name == "review") {
+        let target = len(command.arguments) == 0 ? { type: "uncommittedChanges" } : { type: "custom", instructions: command.arguments };
+        chat.write({ id: 3, method: "review/start", params: { threadId: said.thread, target: target, delivery: "inline" } });
+        return;
+    }
+    let input = input_of(said.prompt ?? "", said.images);
+    if (command != null) {
+        let found = said.skills.filter(skill => skill.name.lower() == command.name);
+        if (len(found) == 0) { chat.error("Unknown or unavailable Codex command /" + command.name + ". Use /skills to refresh the list."); chat.done(); return; }
+        let skill = found[0];
+        let mention = "$" + skill.name;
+        if (len(command.arguments) > 0) mention = mention + " " + command.arguments;
+        input = [{ type: "text", text: mention }, { type: "skill", name: skill.name, path: skill.path }];
+    }
+    let turn = { threadId: said.thread, input: input, model: model_of(hex_of.hex, chat) };
+    let effort = option(hex_of.hex, chat, "effort") ?? "";
+    if (len(effort) > 0) turn.effort = effort;
+    chat.write({ id: 3, method: "turn/start", params: turn });
 }
 
 // What codex is run with for a turn, its app-server, a conversation of JSON lines on its stdin and stdout rather than a
@@ -157,7 +231,7 @@ let conversations = {};
 func conversation_of(chat, fresh) {
     let said = conversations[chat.id];
     if (said == null || fresh) {
-        said = { thread: chat.session(), turn: null, next: 10, prompt: null, images: [], input: 0, output: 0, cached: 0, taken: 0 };
+        said = { thread: chat.session(), turn: null, next: 10, prompt: null, images: [], input: 0, output: 0, cached: 0, taken: 0, steers: {}, skills: [], skills_ready: false, ready: false, sent: false, command: null };
         conversations[chat.id] = said;
     }
     return said;
@@ -209,24 +283,29 @@ func message_of(hex, text, chat) {
     let images = chat.images != null ? chat.images() : [];
     if (said.turn != null) {
         said.next = said.next + 1;
+        if (chat.steer_result != null) said.steers["request_" + said.next] = text;
         return { id: said.next, method: "turn/steer", params: { threadId: said.thread, expectedTurnId: said.turn, input: input_of(text, images) } };
     }
 
     said.prompt = text;
+    said.command = slash_of(text);
     said.images = images;
     // /compact sums up the thread's context once it's taken up, in place of a turn
     said.compact = text.trim() == "/compact" && said.thread != null;
-    let rules = (hex.harness_rules ?? "") + "\n" + instructions;
+    let rules = (hex.harness_rules ?? "") + "\n" + (hex.plan_rules != null ? hex.plan_rules + "\n" : "") + instructions;
     let thread = said.thread != null
         ? { id: 2, method: "thread/resume", params: { threadId: said.thread, approvalPolicy: "untrusted", sandbox: option(hex, chat, "sandbox"), developerInstructions: rules, excludeTurns: true } }
         : { id: 2, method: "thread/start", params: { approvalPolicy: "untrusted", sandbox: option(hex, chat, "sandbox"), cwd: chat.folder, developerInstructions: rules, model: model_of(hex, chat), ephemeral: false } };
-    return [
+    let opening = [
         { id: 1, method: "initialize", params: { clientInfo: { name: "hex", title: "Hex", version: "1" }, capabilities: { experimentalApi: true } } },
         { method: "initialized" },
         // Its models as it has them now, the picker and their names put right by the answer (heard)
         { id: 4, method: "model/list", params: {} },
-        thread
+        { id: 5, method: "skills/list", params: { cwds: [chat.folder], forceReload: true } }
     ];
+    if (said.command?.name == "mcp") opening.push({ id: 6, method: "mcpServerStatus/list", params: {} });
+    else if (said.command?.name != "skills") opening.push(thread);
+    return opening;
 }
 
 // The model asked for, null for its own default
@@ -266,6 +345,11 @@ func heard(chat, event) {
         }
         chat.done();
     }
+    // Its own plan, structured, its steps in the Plan tab beside what hex_plan_update wrote. The prose plan item stays a note
+    else if (method == "turn/plan/updated") {
+        if (chat.plan != null)
+            chat.plan({ steps: (params.plan ?? []).map(step => ({ text: step.step, status: step.status })) });
+    }
     else if (method == "thread/tokenUsage/updated") counted(chat, said, params.tokenUsage);
     else if (method == "account/rateLimits/updated") limits_said(chat, params.rateLimits);
     else if (method == "thread/compacted") {
@@ -285,10 +369,26 @@ func heard(chat, event) {
 
 // An answer to Hex's own request, the thread it's in (the turn asked for then) or the turn started
 func answered(chat, said, event) {
+    let key = "request_" + event.id;
+    let steered = said.steers[key];
+    if (steered != null) {
+        said.steers[key] = null;
+        chat.steer_result(steered, event.error == null);
+        if (event.error != null) chat.note(event.error.message ?? "Codex rejected the queued message.");
+        // A completed turn may have been waiting on this response to resolve its last queued message.
+        if (said.turn == null) chat.done();
+        return;
+    }
     if (event.error != null) {
+        if (event.id == 5) {
+            said.skills_ready = true;
+            if (said.command?.name == "skills") { chat.error(event.error.message ?? "Skills are unavailable."); chat.done(); }
+            else start_requested(chat, said);
+            return;
+        }
         let message = event.error.message ?? "the app-server said no";
         if (!limit_said(chat, message)) chat.error(message);
-        if (event.id == 2 || event.id == 3) chat.done();
+        if (event.id == 1 || event.id == 2 || event.id == 3 || event.id == 6) chat.done();
         return;
     }
     let result = event.result ?? {};
@@ -296,17 +396,18 @@ func answered(chat, said, event) {
         models_listed(chat, result.data ?? []);
         return;
     }
+    if (event.id == 5) { skills_listed(chat, said, result.data ?? []); return; }
+    if (event.id == 6) {
+        for (server in result.data ?? []) chat.note(server.name + " — " + (server.authStatus ?? "connected"));
+        if (result.nextCursor != null) chat.write({ id: 6, method: "mcpServerStatus/list", params: { cursor: result.nextCursor } });
+        else chat.done();
+        return;
+    }
     if (event.id == 2) {
         said.thread = result.thread?.id ?? said.thread;
         if (said.thread != null) chat.session(said.thread);
-        if (said.compact == true) {
-            chat.write({ id: 3, method: "thread/compact/start", params: { threadId: said.thread } });
-            return;
-        }
-        let turn = { threadId: said.thread, input: input_of(said.prompt ?? "", said.images) };
-        let effort = option(hex_of.hex, chat, "effort") ?? "";
-        if (len(effort) > 0) turn.effort = effort;
-        chat.write({ id: 3, method: "turn/start", params: turn });
+        said.ready = true;
+        start_requested(chat, said);
     }
     else if (event.id == 3) said.turn = result.turn?.id;
 }
@@ -380,7 +481,7 @@ func started(chat, said, item) {
     if (item == null) return;
     if (item.type == "userMessage") {
         said.taken = said.taken + 1;
-        if (said.taken > 1) chat.taken();
+        if (chat.steer_result == null && said.taken > 1) chat.taken();
     }
     else if (item.type == "commandExecution") chat.tool(item.id, "command", script_of(item.command ?? ""));
     else if (item.type == "mcpToolCall") chat.tool(item.id, "mcp__" + item.server + "__" + item.tool, item.arguments ?? "");

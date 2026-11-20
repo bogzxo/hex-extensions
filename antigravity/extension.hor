@@ -7,7 +7,7 @@
 let extension = {
     name: "Antigravity",
     description: "Google's Antigravity CLI (agy) run from the Agents panel on your Google subscription, connected to Hex and finding code through its index.",
-    version: "1.2.1",
+    version: "1.3.0",
     author: "bogz",
     settings: {
         budget: { title: "Answer size", about: "The most characters a harness answer is for Antigravity when it doesn't say, about four to a token.", kind: "number", least: 1000, most: 60000, step: 1000, default: 6000 },
@@ -38,6 +38,7 @@ let options = [
 // The text a chat has been streamed so far and the model it runs, by chat id. agy says its answer in fragments, which
 // are one row here
 let pending = {};
+let responded = {};
 let models = {};
 
 func on_start(hex) {
@@ -47,12 +48,13 @@ func on_start(hex) {
     }
     say_who(hex);
     ask_models(hex);
+    ask_commands(hex);
     hex.command("Connect Antigravity to this folder", hex => connect(hex));
 }
 
 func on_setting(hex, name, value) {
     say_who(hex);
-    if (name == "program") ask_models(hex);
+    if (name == "program") { ask_models(hex); ask_commands(hex); }
 }
 
 // The models the account may use as agy says them (agy models, an id and its name a line), so the picker has every
@@ -88,6 +90,62 @@ func models_of(said) {
     return found;
 }
 
+// Print-mode /help is the authority for built-ins; these are safe read-only fallbacks on older CLIs.
+let command_list = [
+    { name: "skills", about: "List available skills.", standalone: true },
+    { name: "usage", about: "Show model quota usage.", standalone: true },
+    { name: "credits", about: "Show remaining credits.", standalone: true },
+    { name: "agents", about: "List available custom agents.", standalone: true },
+    { name: "config", about: "Show provider settings.", standalone: true },
+    { name: "hooks", about: "Show configured hooks.", standalone: true },
+    { name: "plugin", about: "List and manage provider plugins.", hint: "[arguments]", standalone: true },
+    { name: "changelog", about: "Show provider release notes.", standalone: true }
+];
+let skill_commands = [];
+func commands_now() {
+    let all = [];
+    for (command in command_list) all.push(command);
+    for (skill in skill_commands) if (!all.map(each => each.name).contains(skill.name)) all.push(skill);
+    return all;
+}
+func command_result(hex, output) {
+    if (output == null) return null;
+    for (line in output.split("\n"))
+        if (line.trim().starts_with("{")) {
+            let result = hex.json_parse(line);
+            if (result?.command != null) return result;
+            if (result?.result?.command != null) return result.result;
+        }
+    return null;
+}
+func ask_commands(hex) {
+    if (hex.program_output == null) return;
+    hex.program_output(hex.setting("program"), ["-p", "/help", "--output-format", "json"], (hex, output) => {
+        let data = command_result(hex, output)?.command?.data?.commands;
+        if (data == null) return;
+        let commands = [];
+        for (command in data) {
+            commands.push({ name: command.name, about: command.description ?? "", standalone: true });
+            for (alias in command.aliases ?? []) commands.push({ name: alias, about: command.description ?? "", standalone: true });
+        }
+        command_list = commands;
+        say_who(hex);
+    });
+    hex.program_output(hex.setting("program"), ["-p", "/skills", "--output-format", "json"], (hex, output) => {
+        let data = command_result(hex, output)?.command?.data?.skills;
+        if (data == null) return;
+        skill_commands = [];
+        for (skill in data)
+            if (skill.user_invocable != false && skill.disable_slash_command != true)
+                skill_commands.push({ name: skill.name, about: skill.description ?? "", hint: "[arguments]" });
+        say_who(hex);
+    });
+}
+func standalone_command(text) {
+    let name = text.trim().split(" ")[0].split("\t")[0].split("\r")[0].split("\n")[0];
+    return command_list.map(each => "/" + each.name).contains(name);
+}
+
 // The options with the models agy said in place of those written here, once it's said them
 func options_now() {
     if (len(listed) == 0) return options;
@@ -115,7 +173,8 @@ func say_who(hex) {
             install: "Install it with winget install Google.AntigravityCLI, then run agy once in a terminal to sign in, or say where it is in Antigravity's settings.",
             stdin: true,
             options: options_now(),
-            arguments: (prompt, chat) => arguments_for(hex, chat),
+            commands: commands_now(),
+            arguments: (prompt, chat) => arguments_for(hex, chat, prompt),
             message: (text, chat) => message_of(text),
             on_event: (chat, event) => heard(hex, chat, event)
         }
@@ -125,7 +184,16 @@ func say_who(hex) {
 // What agy is run with for a run of turns. stream-json both ways, the prompt and anything asked after it a user line
 // each on stdin, so it's never given with -p. The hex server goes into the folder's .agents/mcp_config.json first, told
 // which chat it's for. The conversation is gone on with by its id so the chat goes on
-func arguments_for(hex, chat) {
+func arguments_for(hex, chat, prompt) {
+    pending[chat.id] = "";
+    responded[chat.id] = false;
+    // TUI commands reject stream input. Print mode returns a structured result without a model turn.
+    if (standalone_command(prompt)) {
+        let arguments = ["-p", prompt, "--output-format", "stream-json"];
+        let session = chat.session();
+        if (session != null) { arguments.push("--conversation"); arguments.push(session); }
+        return arguments;
+    }
     let folders = hex.workspace();
     if (len(folders) > 0) {
         let server = hex.mcp_server(chat);
@@ -162,6 +230,7 @@ func arguments_for(hex, chat) {
 
 // A user's turn as a line of agy's stream-json input
 func message_of(text) {
+    if (standalone_command(text)) return "";
     return { event: "user", message: { content: text } };
 }
 
@@ -186,7 +255,7 @@ func quoted(text) {
 func flush(chat) {
     let said = pending[chat.id] ?? "";
     pending[chat.id] = "";
-    if (len(said.trim()) > 0) chat.text(said);
+    if (len(said.trim()) > 0) { chat.text(said); responded[chat.id] = true; }
 }
 
 // How much a model holds, Gemini's million and Claude's two hundred thousand, which agy doesn't say
@@ -220,6 +289,14 @@ func heard(hex, chat, line) {
     else if (line.event == "result") {
         let result = line.result ?? {};
         flush(chat);
+        if (responded[chat.id] != true && len(result.response ?? "") > 0) chat.text(result.response);
+        if (result.command?.name == "skills") {
+            skill_commands = [];
+            for (skill in result.command.data?.skills ?? [])
+                if (skill.user_invocable != false && skill.disable_slash_command != true)
+                    skill_commands.push({ name: skill.name, about: skill.description ?? "", hint: "[arguments]" });
+            say_who(hex);
+        }
         if (result.conversation_id != null) chat.session(result.conversation_id);
         if (result.status == "ERROR" || result.status == "INVALID") trouble(chat, said_of(result.error) ?? "the turn failed", true);
         else if (result.status == "CANCELED" || result.status == "INTERRUPTED") chat.note("the turn was stopped");

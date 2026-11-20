@@ -6,7 +6,7 @@
 let extension = {
     name: "Claude Code",
     description: "Claude Code connected to Hex, finding code through Hex's index instead of grep and whole files.",
-    version: "1.11.0",
+    version: "1.12.0",
     author: "bogz",
     settings: {
         budget: { title: "Answer size", about: "The most characters a harness answer is for Claude Code when it doesn't say, about four to a token.", kind: "number", least: 1000, most: 60000, step: 1000, default: 8000 },
@@ -22,7 +22,7 @@ let extension = {
         max_budget: { title: "Budget a turn", about: "The most dollars a turn may spend before it stops, no limit at 0.", kind: "number", least: 0, most: 1000, step: 1, default: 0 },
         harness_guard: { title: "Use Hex's tools in the workspace", about: "Hex's own tools find, read and change the workspace's files faster and in fewer tokens. This says what happens when Claude Code uses its own instead: grep, find or cat in the shell, or its Grep, Glob, Read, Edit and Write.", kind: "choice",
             choices: ["strict", "insist", "remind", "off"], labels: ["Always use Hex's tools", "Search and read with Hex's tools", "Suggest Hex's tools", "Don't interfere"],
-            help: ["Searching, reading and editing workspace files any other way is blocked, and Claude Code is told which Hex tool to use instead (hex_search, hex_read, hex_edit, hex_write).", "Searches and shell reads are blocked and pointed to the Hex tool. Its own Read, Edit and Write still work.", "Nothing is blocked. Claude Code is told which Hex tool would have done it.", "Claude Code uses whatever tools it likes."], default: "strict" },
+            help: ["Searching, reading and editing workspace files any other way is blocked, and Claude Code is told which Hex tool to use instead (hex_search, hex_read, hex_edit, hex_write).", "Searches and shell reads are blocked and pointed to the Hex tool. Its own Read, Edit and Write still work.", "Nothing is blocked. Claude Code is told which Hex tool would have done it.", "Claude Code uses whatever tools it likes."], default: "remind" },
         servers: { title: "Servers for each agent", about: "What Claude Code starts beside every agent Hex runs. Plugins' language servers and MCP servers load the whole solution once per agent, a gigabyte and half a minute of CPU each, where Hex already has the code indexed and its own language servers running.", kind: "choice",
             choices: ["shared", "own"], labels: ["Share Hex's", "Each agent its own"],
             help: ["Your own MCP servers start as they always have, plugins' C# and Python language servers and their MCP servers don't, Hex's tools answer what they would.", "Everything Claude Code would start by itself, for every agent."], default: "shared" },
@@ -65,11 +65,45 @@ func on_start(hex) {
         if (len(kept) > 0) discovered.models = kept;
     }
     say_who(hex);
+    ask_commands(hex);
     hex.command("Connect Claude Code to this folder", hex => connect(hex));
     hex.command("Teach Claude Code the Hex tools", hex => teach(hex));
 }
 
-func on_setting(hex, name, value) { say_who(hex); }
+func on_setting(hex, name, value) {
+    if (name == "program") clear_and_discover(hex);
+    else say_who(hex);
+}
+
+func on_workspace_changed(hex) { clear_and_discover(hex); }
+
+func clear_and_discover(hex) {
+    discovered.commands = [];
+    discovered.said = "";
+    say_who(hex);
+    ask_commands(hex);
+}
+
+// Initialize the CLI without a user message so the first composer already has the project's skills.
+let discovery = { generation: 0 };
+func ask_commands(hex) {
+    if (hex.program_output == null) return;
+    discovery.generation = discovery.generation + 1;
+    let generation = discovery.generation;
+    let folder = hex.workspace == null ? "" : ((hex.workspace() ?? [])[0] ?? "");
+    let request = "{\"type\":\"control_request\",\"request_id\":\"hex-catalog\",\"request\":{\"subtype\":\"initialize\"}}";
+    hex.program_output(hex.setting("program"), ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"], (hex, output) => {
+        if (output == null || generation != discovery.generation) return;
+        for (line in output.split("\n")) {
+            if (!line.trim().starts_with("{")) continue;
+            let response = hex.json_parse(line)?.response;
+            if (response?.request_id == "hex-catalog" && response.subtype == "success") {
+                introduced(null, response.response ?? {});
+                return;
+            }
+        }
+    }, folder, request);
+}
 
 // Tells the harness who Claude Code is and how to run it, again whenever its settings change
 func say_who(hex) {
@@ -138,7 +172,8 @@ func arguments_for(hex, chat) {
     // reading code goes through Hex first. The shell is still there for what the harness doesn't do
     if (hex.harness_rules != null) {
         arguments.push("--append-system-prompt");
-        arguments.push(hex.harness_rules);
+        // The Plan tab's rules for this chat's own agent alone, its subagents below are told the harness only
+        arguments.push(hex.plan_rules != null ? hex.harness_rules + "\n" + hex.plan_rules : hex.harness_rules);
         // Its own subagents are told nothing of what it was, so the Explore one it sends searching is made again here
         // knowing the harness, in a file of the chat's own as the server is
         let agents = hex.temp + "/claude-agents-" + chat.id + ".json";
@@ -154,7 +189,7 @@ func arguments_for(hex, chat) {
     // Hex itself is the hook it runs before its shell, Grep and Glob, which turns a read of the workspace back to the
     // harness, and strict (the default) before its own Read, Edit and Write too, which hex_read, hex_edit and hex_write
     // do in their place. In a settings file of the chat's own, the user's own settings kept as they are
-    let guard = hex.setting("harness_guard") ?? "strict";
+    let guard = hex.setting("harness_guard") ?? "remind";
     if (guard != "off" && hex.harness_rules != null && hex.executable != null) {
         let hook = "\"" + hex.executable.replace("\\", "/") + "\" --harness-hook --guard " + guard;
         for (folder in hex.workspace()) hook = hook + " --folder \"" + folder.replace("\\", "/") + "\"";
@@ -327,11 +362,17 @@ func introduced(chat, said) {
         if (model.value == null) continue;
         models.push({ value: model.value == "default" ? "" : model.value, label: model.displayName ?? model.value, help: model.description });
     }
-    let commands = [];
-    for (command in said.commands ?? []) {
-        if (command.name != null) commands.push({ name: command.name, about: command.description ?? "", hint: command.argumentHint ?? "" });
+    let commands = discovered.commands;
+    if (said.commands != null) {
+        commands = [];
+        for (command in said.commands) {
+            if (command.name == null) continue;
+            commands.push({ name: command.name, about: command.description ?? "", hint: command.argumentHint ?? "" });
+            for (alias in command.aliases ?? [])
+                commands.push({ name: alias, about: command.description ?? "", hint: command.argumentHint ?? "" });
+        }
     }
-    let key = models.map(each => each.value + "=" + each.label).join("|") + "#" + commands.map(each => each.name).join("|");
+    let key = models.map(each => each.value + "=" + each.label).join("|") + "#" + commands.map(each => each.name + "=" + each.about + "=" + each.hint).join("|");
     if ((len(models) == 0 && len(commands) == 0) || key == discovered.said) return;
     discovered.commands = commands;
     if (len(models) > 0) {
@@ -455,12 +496,29 @@ func heard(chat, event) {
                 // Its to-do list as a checklist row, as Codex's is, rather than a tool row of JSON
                 todos[part.id] = true;
                 chat.note((part.input?.todos ?? []).map(todo => mark_of(todo.status) + todo.content).join("\n"));
+                // And the same steps into the Plan tab, matched to the rows there, the call's id so it's taken once
+                if (chat.plan != null)
+                    chat.plan({ key: part.id, steps: (part.input?.todos ?? []).map(todo => ({ id: todo.id, text: todo.content, status: todo.status })) });
             }
             else if (part.type == "tool_use") chat.tool(part.id, part.name, part.input);
         }
         return;
     }
     if (event.type == "user") {
+        if (said_by_command(event.message?.content)) {
+            let content = event.message?.content;
+            let output = typeof(content) == "text" ? content : (content ?? []).map(part => part?.text ?? "").join("");
+            let failed = output.contains("<local-command-stderr>");
+            let tag = failed ? "local-command-stderr" : "local-command-stdout";
+            let from = output.index_of("<" + tag + ">") + len(tag) + 2;
+            let to = output.index_of("</" + tag + ">");
+            let body = to >= from ? output.substring(from, to).trim() : output;
+            if (len(body) > 0) {
+                if (failed) chat.error(body);
+                else chat.note(body);
+            }
+            return;
+        }
         // A message said back is one it took in, the first it was started with and every one asked as it worked
         if (event.isReplay ?? false) {
             // What a slash command printed comes back the same way, and wasn't asked as it worked
