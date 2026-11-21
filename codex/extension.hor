@@ -209,6 +209,7 @@ func arguments_for(hex, chat) {
         "-c", "mcp_servers.hex.args=[" + quoted.join(",") + "]",
         "-c", "mcp_servers.hex.tool_timeout_sec=660",
         "-c", "mcp_servers.hex.enabled=true",
+        "-c", "mcp_servers.hex.env_vars=[\"HEX_HOME\"]",
         "-c", "mcp_servers.hex.default_tools_approval_mode=\"approve\""];
     let effort = option(hex, chat, "effort") ?? "";
     if (len(effort) > 0) {
