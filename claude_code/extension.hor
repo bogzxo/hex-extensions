@@ -90,7 +90,9 @@ func ask_commands(hex) {
     if (hex.program_output == null) return;
     discovery.generation = discovery.generation + 1;
     let generation = discovery.generation;
-    let folder = hex.workspace == null ? "" : ((hex.workspace() ?? [])[0] ?? "");
+    // No folder open (a Hex started on nothing) asks from nowhere in particular rather than failing to start
+    let folders = hex.workspace == null ? [] : (hex.workspace() ?? []);
+    let folder = len(folders) > 0 ? folders[0] : "";
     let request = "{\"type\":\"control_request\",\"request_id\":\"hex-catalog\",\"request\":{\"subtype\":\"initialize\"}}";
     hex.program_output(hex.setting("program"), ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"], (hex, output) => {
         if (output == null || generation != discovery.generation) return;
