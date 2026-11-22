@@ -6,7 +6,7 @@
 let extension = {
     name: "Codex",
     description: "Codex connected to Hex and run from the Agents panel, finding code through Hex's index instead of rg and whole files.",
-    version: "1.9.0",
+    version: "1.9.1",
     author: "bogz",
     settings: {
         budget: { title: "Answer size", about: "The most characters a harness answer is for Codex when it doesn't say, about four to a token.", kind: "number", least: 1000, most: 60000, step: 1000, default: 6000 },
@@ -30,6 +30,20 @@ let windows = {};
 // Its models by the names it gives them, from its own cache, handed to Hex with each chat so they're said in full
 let model_names = { list: [] };
 
+let ignored_caches = {};
+
+func read_cache(hex, path) {
+    if (hex.try_read == null || !hex.exists(path)) return null;
+    let read = hex.try_read(path);
+    let cached = read.text == null ? null : hex.json_parse(read.text);
+    if (typeof(cached) == "object") return cached;
+    if (ignored_caches[path] != true) {
+        ignored_caches[path] = true;
+        print("Could not read the optional cache " + path + ".");
+    }
+    return null;
+}
+
 func options_for(hex) {
     model_names.list = [];
     let models = [{ value: "", label: "Default model" }];
@@ -38,14 +52,18 @@ func options_for(hex) {
     let names = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max", ultra: "Ultra" };
     let seen = [];
     let cache = hex.home + "/.codex/models_cache.json";
-    if (hex.exists(cache)) {
-        let cached = hex.json_parse(hex.read(cache));
-        for (model in cached?.models ?? []) {
-            if (model.visibility != "list") continue;
-            models.push({ value: model.slug, label: model.display_name ?? model.slug });
-            if (model.display_name != null) model_names.list.push({ id: model.slug, name: model.display_name });
-            windows[model.slug] = model.context_window ?? 0;
-            for (level in model.supported_reasoning_levels ?? []) seen.push(level.effort);
+    let cached = read_cache(hex, cache)?.models;
+    if (typeof(cached) == "list") {
+        for (model in cached) {
+            if (typeof(model) != "object" || model.visibility != "list" || typeof(model.slug) != "text") continue;
+            let name = typeof(model.display_name) == "text" ? model.display_name : model.slug;
+            models.push({ value: model.slug, label: name });
+            if (name != model.slug) model_names.list.push({ id: model.slug, name: name });
+            windows[model.slug] = typeof(model.context_window) == "number" ? model.context_window : 0;
+            let levels = model.supported_reasoning_levels;
+            if (typeof(levels) == "list") {
+                for (level in levels) if (typeof(level) == "object" && typeof(level.effort) == "text") seen.push(level.effort);
+            }
         }
     }
     // What it said itself over its cache file, once a run has asked it
@@ -81,10 +99,8 @@ func on_start(hex) {
         return;
     }
     // The models it said the last time, the picker made of them from the start
-    if (hex.exists(models_file(hex))) {
-        let kept = hex.json_parse(hex.read(models_file(hex)))?.models ?? [];
-        if (len(kept) > 0) listed_models.list = kept;
-    }
+    let kept = read_cache(hex, models_file(hex))?.models;
+    if (typeof(kept) == "list" && len(kept) > 0) listed_models.list = kept;
     say_who(hex);
     hex.command("Connect Codex to Hex", hex => connect(hex));
     hex.command("Teach Codex the Hex tools", hex => teach(hex));

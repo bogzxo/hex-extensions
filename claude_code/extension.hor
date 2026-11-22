@@ -6,7 +6,7 @@
 let extension = {
     name: "Claude Code",
     description: "Claude Code connected to Hex, finding code through Hex's index instead of grep and whole files.",
-    version: "1.12.0",
+    version: "1.12.1",
     author: "bogz",
     settings: {
         budget: { title: "Answer size", about: "The most characters a harness answer is for Claude Code when it doesn't say, about four to a token.", kind: "number", least: 1000, most: 60000, step: 1000, default: 8000 },
@@ -53,6 +53,20 @@ let teaching = "## Finding code\n\nThis folder is open in Hex, connected as an M
 // The hex object kept for the run's callbacks, which are only handed the chat and the line
 let hex_of = { hex: null };
 
+let ignored_caches = {};
+
+func read_cache(hex, path) {
+    if (hex.try_read == null || !hex.exists(path)) return null;
+    let read = hex.try_read(path);
+    let cached = read.text == null ? null : hex.json_parse(read.text);
+    if (typeof(cached) == "object") return cached;
+    if (ignored_caches[path] != true) {
+        ignored_caches[path] = true;
+        print("Could not read the optional cache " + path + ".");
+    }
+    return null;
+}
+
 func on_start(hex) {
     hex_of.hex = hex;
     if (hex.agent == null) {
@@ -60,10 +74,8 @@ func on_start(hex) {
         return;
     }
     // The models it said the last time, so the picker has them from the start rather than once a run has asked
-    if (hex.exists(models_file(hex))) {
-        let kept = hex.json_parse(hex.read(models_file(hex)))?.models ?? [];
-        if (len(kept) > 0) discovered.models = kept;
-    }
+    let kept = read_cache(hex, models_file(hex))?.models;
+    if (typeof(kept) == "list" && len(kept) > 0) discovered.models = kept;
     say_who(hex);
     ask_commands(hex);
     hex.command("Connect Claude Code to this folder", hex => connect(hex));
@@ -616,11 +628,9 @@ func windows_file() { return hex_of.hex.temp + "/claude-windows.json"; }
 
 func known_window(model) {
     if (model == null || hex_of.hex == null) return 0;
-    if (windows.known == null) {
-        windows.known = {};
-        if (hex_of.hex.exists(windows_file())) windows.known = hex_of.hex.json_parse(hex_of.hex.read(windows_file())) ?? {};
-    }
-    let window = windows.known[model] ?? 0;
+    if (windows.known == null) windows.known = read_cache(hex_of.hex, windows_file()) ?? {};
+    let seen = windows.known[model];
+    let window = typeof(seen) == "number" ? seen : 0;
     // A model asked for with [1m] has a million tokens whether or not it was seen before
     if (window == 0 && model.contains("[1m]")) window = 1000000;
     return window;
