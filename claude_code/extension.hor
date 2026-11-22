@@ -204,10 +204,12 @@ func arguments_for(hex, chat) {
     // harness, and strict (the default) before its own Read, Edit and Write too, which hex_read, hex_edit and hex_write
     // do in their place. In a settings file of the chat's own, the user's own settings kept as they are
     let guard = hex.setting("harness_guard") ?? "strict";
-    if (guard != "off" && hex.harness_rules != null && hex.executable != null) {
+    if ((guard != "off" || chat.private_worktree) && hex.harness_rules != null && hex.executable != null) {
         let hook = "\"" + hex.executable.replace("\\", "/") + "\" --harness-hook --guard " + guard;
         for (folder in hex.workspace()) hook = hook + " --folder \"" + folder.replace("\\", "/") + "\"";
-        hex.json_set(settings, ["hooks"], { PreToolUse: [{ matcher: "Bash|Grep|Glob|PowerShell|Read|Edit|MultiEdit|Write|NotebookEdit", hooks: [{ type: "command", command: hook, timeout: 10 }] }] });
+        if (chat.private_worktree)
+            hook = hook + " --agent-chat " + chat.id + " --private-root \"" + chat.folder.replace("\\", "/") + "\"";
+        hex.json_set(settings, ["hooks"], { PreToolUse: [{ matcher: "Bash|Grep|Glob|PowerShell|Read|Edit|MultiEdit|Write|NotebookEdit", hooks: [{ type: "command", command: hook, timeout: chat.private_worktree ? 60 : 10 }] }] });
         settled = true;
     }
     if (settled) {
